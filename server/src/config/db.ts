@@ -41,9 +41,15 @@ export const connectDB = async (): Promise<typeof mongoose> => {
     process.on('SIGINT', gracefulExit);
     process.on('SIGTERM', gracefulExit);
 
-    // Establish connection with 5-second server selection timeout
+    // Connection options:
+    // - serverSelectionTimeoutMS: 5000 prevents long stalls on unreachable databases.
+    // - tlsAllowInvalidCertificates: Strictly restricted to development (NODE_ENV === 'development')
+    //   to resolve Windows local network/antivirus TLS leaf certificate inspection
+    //   (UNABLE_TO_VERIFY_LEAF_SIGNATURE). Production NEVER disables TLS certificate validation.
+    const isDevelopment = env.NODE_ENV === 'development';
     const conn = await mongoose.connect(env.MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000
+      serverSelectionTimeoutMS: 5000,
+      tlsAllowInvalidCertificates: isDevelopment
     });
     return conn;
   } catch (error) {
