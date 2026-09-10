@@ -1,35 +1,28 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
-export type LeadStatus = 'new' | 'contacted' | 'replied' | 'qualified' | 'unresponsive' | 'bounced';
-export type LeadSource = 'manual' | 'csv_import' | 'search_scraper' | 'api';
-
-export interface ILeadLocation {
-  city?: string;
-  state?: string;
-  country?: string;
-  postalCode?: string;
-}
+export type LeadStatus = 'new' | 'contacted' | 'qualified' | 'converted' | 'lost';
+export type LeadPriority = 'low' | 'medium' | 'high';
 
 export interface ILead extends Document {
   _id: Types.ObjectId;
   workspaceId: Types.ObjectId;
-  firstName?: string;
+  firstName: string;
   lastName?: string;
-  fullName?: string;
   email?: string;
   phone?: string;
-  companyName?: string;
-  jobTitle?: string;
-  location?: ILeadLocation;
+  company?: string;
+  source?: string;
   status: LeadStatus;
-  score: number;
-  tags: string[];
-  source: LeadSource;
-  customFields: Map<string, any>;
-  lastContactedAt?: Date | null;
+  priority: LeadPriority;
+  notes?: string;
+  createdBy: Types.ObjectId;
+  isArchived: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
+
+export const LEAD_STATUS_VALUES: LeadStatus[] = ['new', 'contacted', 'qualified', 'converted', 'lost'];
+export const LEAD_PRIORITY_VALUES: LeadPriority[] = ['low', 'medium', 'high'];
 
 const leadSchema = new Schema<ILead>(
   {
@@ -41,76 +34,68 @@ const leadSchema = new Schema<ILead>(
     },
     firstName: {
       type: String,
-      trim: true
+      required: [true, 'First name is required'],
+      trim: true,
+      maxlength: [100, 'First name cannot exceed 100 characters']
     },
     lastName: {
       type: String,
-      trim: true
-    },
-    fullName: {
-      type: String,
-      trim: true
+      trim: true,
+      maxlength: [100, 'Last name cannot exceed 100 characters']
     },
     email: {
       type: String,
       trim: true,
-      lowercase: true
+      lowercase: true,
+      maxlength: [255, 'Email cannot exceed 255 characters']
     },
     phone: {
       type: String,
-      trim: true
+      trim: true,
+      maxlength: [50, 'Phone cannot exceed 50 characters']
     },
-    companyName: {
+    company: {
       type: String,
-      trim: true
+      trim: true,
+      maxlength: [150, 'Company cannot exceed 150 characters']
     },
-    jobTitle: {
+    source: {
       type: String,
-      trim: true
-    },
-    location: {
-      city: { type: String, trim: true },
-      state: { type: String, trim: true },
-      country: { type: String, trim: true },
-      postalCode: { type: String, trim: true }
+      trim: true,
+      default: 'manual',
+      maxlength: [100, 'Source cannot exceed 100 characters']
     },
     status: {
       type: String,
       enum: {
-        values: ['new', 'contacted', 'replied', 'qualified', 'unresponsive', 'bounced'],
+        values: LEAD_STATUS_VALUES,
         message: '{VALUE} is not a valid lead status'
       },
-      default: 'new',
-      index: true
+      default: 'new'
     },
-    score: {
-      type: Number,
-      min: [0, 'Score cannot be less than 0'],
-      max: [100, 'Score cannot exceed 100'],
-      default: 0,
-      index: true
-    },
-    tags: {
-      type: [String],
-      default: [],
-      index: true
-    },
-    source: {
+    priority: {
       type: String,
       enum: {
-        values: ['manual', 'csv_import', 'search_scraper', 'api'],
-        message: '{VALUE} is not a supported lead source'
+        values: LEAD_PRIORITY_VALUES,
+        message: '{VALUE} is not a valid lead priority'
       },
-      default: 'manual'
+      default: 'medium'
     },
-    customFields: {
-      type: Map,
-      of: Schema.Types.Mixed,
-      default: () => new Map()
+    notes: {
+      type: String,
+      trim: true,
+      maxlength: [5000, 'Notes cannot exceed 5000 characters']
     },
-    lastContactedAt: {
-      type: Date,
-      default: null
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      required: [true, 'CreatedBy user ID is required'],
+      index: true
+    },
+    isArchived: {
+      type: Boolean,
+      default: false,
+      index: true
     }
   },
   {
@@ -118,25 +103,30 @@ const leadSchema = new Schema<ILead>(
   }
 );
 
-// Auto-derive fullName if firstName or lastName are updated
-leadSchema.pre('save', function () {
-  if (this.firstName || this.lastName) {
-    this.fullName = [this.firstName, this.lastName].filter(Boolean).join(' ').trim();
-  }
-});
+// --- Compound Indexes for CRM Query Performance & Multi-Tenant Isolation ---
 
-// Workspace-scoped compound unique index for lead email deduplication.
-// Allows multiple workspaces to hold the same contact email independently,
-// but prevents duplicates inside the same workspace.
+// 1. Primary listing and pagination index (workspace-scoped, non-archived, descending createdAt)
+leadSchema.index({ workspaceId: 1, isArchived: 1, createdAt: -1 });
+
+// 2. Status filtering index
+leadSchema.index({ workspaceId: 1, isArchived: 1, status: 1 });
+
+// 3. Priority filtering index
+leadSchema.index({ workspaceId: 1, isArchived: 1, priority: 1 });
+
+// 4. Source filtering index
+leadSchema.index({ workspaceId: 1, isArchived: 1, source: 1 });
+
+// 5. Name sorting index
+leadSchema.index({ workspaceId: 1, isArchived: 1, firstName: 1 });
+
+// 6. Company sorting index
+leadSchema.index({ workspaceId: 1, isArchived: 1, company: 1 });
+
+// 7. Email lookup index within a workspace
 leadSchema.index(
   { workspaceId: 1, email: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { email: { $type: 'string' } }
-  }
+  { partialFilterExpression: { email: { $type: 'string' } } }
 );
-
-// High-speed compound query index for workspace dashboard filtering by status and score
-leadSchema.index({ workspaceId: 1, status: 1, score: -1 });
 
 export const Lead = model<ILead>('Lead', leadSchema);
