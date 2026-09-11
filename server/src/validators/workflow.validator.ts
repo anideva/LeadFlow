@@ -338,3 +338,58 @@ export const validateTestWorkflow = (req: Request, res: Response, next: NextFunc
 
   next();
 };
+
+/**
+ * Validates executionId param format for GET /api/workflows/executions/:executionId.
+ */
+export const validateExecutionObjectId = (req: Request, res: Response, next: NextFunction): void => {
+  const { executionId } = req.params;
+
+  if (!executionId || !Types.ObjectId.isValid(executionId)) {
+    res.status(400).json({
+      success: false,
+      error: 'Invalid execution ID format.'
+    });
+    return;
+  }
+
+  next();
+};
+
+/**
+ * Validates pagination query parameters for GET /api/workflows/:id/executions.
+ */
+export const validateExecutionQuery = (req: Request, res: Response, next: NextFunction): void => {
+  const { page, limit } = req.query;
+
+  let parsedPage = 1;
+  if (page !== undefined) {
+    parsedPage = parseInt(page as string, 10);
+    if (isNaN(parsedPage) || parsedPage < 1) {
+      res.status(400).json({
+        success: false,
+        error: 'Query parameter "page" must be a positive integer.'
+      });
+      return;
+    }
+  }
+
+  let parsedLimit = 20;
+  if (limit !== undefined) {
+    parsedLimit = parseInt(limit as string, 10);
+    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      res.status(400).json({
+        success: false,
+        error: 'Query parameter "limit" must be between 1 and 100.'
+      });
+      return;
+    }
+  }
+
+  (req as any).executionQuery = {
+    page: parsedPage,
+    limit: parsedLimit
+  };
+
+  next();
+};

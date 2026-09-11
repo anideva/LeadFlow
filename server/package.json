@@ -7,15 +7,19 @@
   "scripts": {
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "worker:dev": "tsx watch src/workers/workflow.worker.ts",
+    "worker:start": "node dist/workers/workflow.worker.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "bullmq": "^6.3.4",
     "cookie-parser": "^1.4.6",
     "cors": "^2.8.5",
     "csv-parse": "^7.0.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "ioredis": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
     "mongoose": "^9.1.1",
     "multer": "^2.3.0",

@@ -174,11 +174,34 @@ export async function archiveWorkflow(id: string): Promise<void> {
   }
 }
 
-export async function testWorkflow(
-  id: string,
+export interface QueuedExecutionResponse {
+  executionId: string;
+  workflowId: string;
+  leadId: string;
+  status: string;
+}
+
+export interface IWorkflowExecutionRecord {
+  _id: string;
+  workspaceId: string;
+  workflowId: string;
+  triggerType: string;
+  leadId: string;
+  status: string;
+  currentNodeId?: string;
+  executionLog: WorkflowExecutionStep[];
+  startedAt?: string;
+  completedAt?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function queueTestWorkflow(
+  workflowId: string,
   leadId: string
-): Promise<WorkflowExecutionSummary> {
-  const res = await fetch(`/api/workflows/${id}/test`, {
+): Promise<QueuedExecutionResponse> {
+  const res = await fetch(`/api/workflows/${workflowId}/test`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -187,8 +210,48 @@ export async function testWorkflow(
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || 'Failed to test workflow execution');
+    throw new Error(data.error || 'Failed to queue workflow execution');
   }
 
   return data.data;
 }
+
+export async function fetchExecutionStatus(
+  executionId: string
+): Promise<IWorkflowExecutionRecord> {
+  const res = await fetch(`/api/workflows/executions/${executionId}`, {
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include'
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to retrieve execution status');
+  }
+
+  return data.data;
+}
+
+export async function fetchWorkflowExecutions(
+  workflowId: string,
+  page = 1,
+  limit = 20
+): Promise<{ data: IWorkflowExecutionRecord[]; pagination: any }> {
+  const res = await fetch(
+    `/api/workflows/${workflowId}/executions?page=${page}&limit=${limit}`,
+    {
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include'
+    }
+  );
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to retrieve workflow executions');
+  }
+
+  return data;
+}
+
+// Backward-compatible alias
+export const testWorkflow = queueTestWorkflow;

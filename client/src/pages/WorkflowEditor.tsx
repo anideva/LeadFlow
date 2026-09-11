@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ReactFlow,
   Controls,
@@ -21,14 +21,15 @@ import {
   fetchWorkflowById,
   createWorkflow,
   updateWorkflow,
-  testWorkflow,
+  queueTestWorkflow,
+  fetchExecutionStatus,
   IWorkflow,
   IWorkflowNode,
   IWorkflowEdge,
   WorkflowStatus,
   WorkflowTriggerType,
   WorkflowNodeType,
-  WorkflowExecutionSummary
+  IWorkflowExecutionRecord
 } from '../api/workflow.api';
 import { fetchEmailTemplates, EmailTemplateItem } from '../api/template.api';
 
@@ -206,8 +207,19 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
   const [testModalOpen, setTestModalOpen] = useState(false);
   const [testLeadId, setTestLeadId] = useState('');
   const [testRunning, setTestRunning] = useState(false);
-  const [testResult, setTestResult] = useState<WorkflowExecutionSummary | null>(null);
+  const [testResult, setTestResult] = useState<IWorkflowExecutionRecord | null>(null);
   const [testError, setTestError] = useState<string | null>(null);
+  const pollingRef = useRef<any>(null);
+
+  // Clean up polling interval on unmount
+  useEffect(() => {
+    return () => {
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
+    };
+  }, []);
 
   // Load templates for action node
   useEffect(() => {
@@ -441,6 +453,15 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
     }
   };
 
+  const handleCloseTestModal = () => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+    setTestRunning(false);
+    setTestModalOpen(false);
+  };
+
   const handleRunTest = async () => {
     if (!workflowId) {
       setError('Please save the workflow before testing execution.');
@@ -451,17 +472,61 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
       return;
     }
 
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+
     try {
       setTestRunning(true);
       setTestError(null);
       setTestResult(null);
 
-      const summary = await testWorkflow(workflowId, testLeadId.trim());
-      setTestResult(summary);
+      const queued = await queueTestWorkflow(workflowId, testLeadId.trim());
+
+      // Show immediate pending state
+      setTestResult({
+        _id: queued.executionId,
+        workspaceId: '',
+        workflowId: queued.workflowId,
+        triggerType: 'manual',
+        leadId: queued.leadId,
+        status: queued.status,
+        executionLog: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      });
+
+      // Poll execution status every 1000ms
+      const pollStartTime = Date.now();
+      pollingRef.current = setInterval(async () => {
+        try {
+          if (Date.now() - pollStartTime > 30000) {
+            if (pollingRef.current) clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            setTestRunning(false);
+            setTestError('Execution polling timed out (worker process may be offline).');
+            return;
+          }
+
+          const statusRecord = await fetchExecutionStatus(queued.executionId);
+          setTestResult(statusRecord);
+
+          if (statusRecord.status === 'completed' || statusRecord.status === 'failed') {
+            if (pollingRef.current) clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            setTestRunning(false);
+          }
+        } catch (pollErr: any) {
+          if (pollingRef.current) clearInterval(pollingRef.current);
+          pollingRef.current = null;
+          setTestRunning(false);
+          setTestError(pollErr.message || 'Error checking execution status.');
+        }
+      }, 1000);
     } catch (err: any) {
-      setTestError(err.message || 'Execution test failed.');
-    } finally {
       setTestRunning(false);
+      setTestError(err.message || 'Execution test failed to queue.');
     }
   };
 
@@ -1001,9 +1066,9 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-              <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#111827' }}>Test Workflow Execution</h3>
+              <h3 style={{ margin: 0, fontSize: '1.1rem', color: '#111827' }}>Test Workflow Execution (Async)</h3>
               <button
-                onClick={() => setTestModalOpen(false)}
+                onClick={handleCloseTestModal}
                 style={{
                   border: 'none',
                   background: 'none',
@@ -1017,7 +1082,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
             </div>
 
             <p style={{ fontSize: '0.875rem', color: '#6b7280', margin: '0 0 1rem 0' }}>
-              Execute a deterministic dry-run of this workflow against a lead in your workspace.
+              Execute this workflow in the background queue against a lead in your workspace.
             </p>
 
             <div style={{ marginBottom: '1rem' }}>
@@ -1057,7 +1122,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem', marginBottom: '1rem' }}>
               <button
-                onClick={() => setTestModalOpen(false)}
+                onClick={handleCloseTestModal}
                 style={{
                   padding: '0.4rem 0.8rem',
                   backgroundColor: '#f3f4f6',
@@ -1074,7 +1139,7 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                 disabled={testRunning}
                 style={{
                   padding: '0.4rem 1rem',
-                  backgroundColor: '#059669',
+                  backgroundColor: testRunning ? '#9ca3af' : '#059669',
                   color: '#fff',
                   border: 'none',
                   borderRadius: '6px',
@@ -1083,39 +1148,79 @@ export const WorkflowEditor: React.FC<WorkflowEditorProps> = ({ workflowId, onBa
                   fontSize: '0.875rem'
                 }}
               >
-                {testRunning ? 'Executing...' : 'Run Test'}
+                {testRunning ? 'Queued & Processing...' : 'Queue & Run Test'}
               </button>
             </div>
 
             {testResult && (
               <div style={{ borderTop: '1px solid #e5e7eb', paddingTop: '1rem' }}>
-                <h4 style={{ margin: '0 0 0.5rem 0', fontSize: '0.95rem', color: '#111827' }}>
-                  Execution Summary ({testResult.status})
-                </h4>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
+                  <h4 style={{ margin: 0, fontSize: '0.95rem', color: '#111827' }}>
+                    Execution Status
+                  </h4>
+                  <span
+                    style={{
+                      padding: '0.2rem 0.5rem',
+                      borderRadius: '4px',
+                      fontSize: '0.75rem',
+                      fontWeight: 600,
+                      textTransform: 'uppercase',
+                      backgroundColor:
+                        testResult.status === 'completed'
+                          ? '#dcfce7'
+                          : testResult.status === 'failed'
+                          ? '#fee2e2'
+                          : testResult.status === 'running'
+                          ? '#e0e7ff'
+                          : '#fef3c7',
+                      color:
+                        testResult.status === 'completed'
+                          ? '#15803d'
+                          : testResult.status === 'failed'
+                          ? '#b91c1c'
+                          : testResult.status === 'running'
+                          ? '#4338ca'
+                          : '#b45309'
+                    }}
+                  >
+                    {testResult.status} {testRunning ? '⏳' : ''}
+                  </span>
+                </div>
                 <div style={{ fontSize: '0.8rem', color: '#4b5563', marginBottom: '0.75rem' }}>
-                  Execution ID: <code>{testResult.executionId}</code> | Steps: {testResult.stepsCount}
-                </div>
-                <div style={{ backgroundColor: '#f9fafb', borderRadius: '6px', padding: '0.5rem', fontSize: '0.75rem' }}>
-                  {testResult.executionLog.map((step, idx) => (
-                    <div
-                      key={idx}
-                      style={{
-                        padding: '0.35rem 0.5rem',
-                        borderBottom: idx < testResult.executionLog.length - 1 ? '1px solid #e5e7eb' : 'none'
-                      }}
-                    >
-                      <strong>Step {idx + 1}:</strong> [{step.nodeType.toUpperCase()}] ({step.nodeId}) —{' '}
-                      <span style={{ color: step.status === 'completed' || step.status === 'executed' ? '#15803d' : '#2563eb' }}>
-                        {step.status}
-                      </span>
-                      {step.details && (
-                        <pre style={{ margin: '0.2rem 0 0 0', fontSize: '0.7rem', color: '#374151' }}>
-                          {JSON.stringify(step.details, null, 2)}
-                        </pre>
-                      )}
+                  Execution ID: <code>{testResult._id}</code> | Steps: {testResult.executionLog?.length || 0}
+                  {testResult.error && (
+                    <div style={{ color: '#b91c1c', marginTop: '0.25rem', fontWeight: 500 }}>
+                      Error: {testResult.error}
                     </div>
-                  ))}
+                  )}
                 </div>
+                {testResult.executionLog && testResult.executionLog.length > 0 ? (
+                  <div style={{ backgroundColor: '#f9fafb', borderRadius: '6px', padding: '0.5rem', fontSize: '0.75rem', maxHeight: '200px', overflowY: 'auto' }}>
+                    {testResult.executionLog.map((step, idx) => (
+                      <div
+                        key={idx}
+                        style={{
+                          padding: '0.35rem 0.5rem',
+                          borderBottom: idx < testResult.executionLog.length - 1 ? '1px solid #e5e7eb' : 'none'
+                        }}
+                      >
+                        <strong>Step {idx + 1}:</strong> [{step.nodeType.toUpperCase()}] ({step.nodeId}) —{' '}
+                        <span style={{ color: step.status === 'completed' || step.status === 'executed' ? '#15803d' : '#2563eb' }}>
+                          {step.status}
+                        </span>
+                        {step.details && (
+                          <pre style={{ margin: '0.2rem 0 0 0', fontSize: '0.7rem', color: '#374151', whiteSpace: 'pre-wrap' }}>
+                            {JSON.stringify(step.details, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.8rem', color: '#6b7280', fontStyle: 'italic', padding: '0.5rem', backgroundColor: '#f9fafb', borderRadius: '6px' }}>
+                    {testRunning ? 'Waiting for worker process to pick up job from BullMQ queue...' : 'No steps recorded.'}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -5,7 +5,9 @@ import {
   getWorkflowById,
   updateWorkflow,
   archiveWorkflow,
-  testWorkflowExecution
+  testWorkflowExecution,
+  getExecutionStatus,
+  getWorkflowExecutions
 } from '../controllers/workflow.controller';
 import { requireAuth } from '../middlewares/auth.middleware';
 import {
@@ -13,7 +15,9 @@ import {
   validateUpdateWorkflow,
   validateWorkflowQuery,
   validateWorkflowObjectId,
-  validateTestWorkflow
+  validateTestWorkflow,
+  validateExecutionObjectId,
+  validateExecutionQuery
 } from '../validators/workflow.validator';
 
 const router = Router();
@@ -23,7 +27,10 @@ router.use(requireAuth);
 
 router.post('/', validateCreateWorkflow, createWorkflow);
 router.get('/', validateWorkflowQuery, getWorkflows);
+// Specific sub-route must come before parameterized :id route
+router.get('/executions/:executionId', validateExecutionObjectId, getExecutionStatus);
 router.get('/:id', validateWorkflowObjectId, getWorkflowById);
+router.get('/:id/executions', validateWorkflowObjectId, validateExecutionQuery, getWorkflowExecutions);
 router.patch('/:id', validateWorkflowObjectId, validateUpdateWorkflow, updateWorkflow);
 router.delete('/:id', validateWorkflowObjectId, archiveWorkflow);
 router.post('/:id/test', validateWorkflowObjectId, validateTestWorkflow, testWorkflowExecution);

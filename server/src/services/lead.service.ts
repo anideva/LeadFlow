@@ -1,6 +1,7 @@
 import { Types } from 'mongoose';
 import { Lead, ILead, LeadStatus, LeadPriority } from '../models/Lead.model';
 import { AppError } from '../utils/error.util';
+import { WorkflowTriggerService } from './workflow-trigger.service';
 
 export interface CreateLeadDTO {
   firstName: string;
@@ -70,6 +71,11 @@ export class LeadService {
       status: dto.status || 'new',
       priority: dto.priority || 'medium',
       notes: dto.notes
+    });
+
+    // Trigger active workflows listening to lead_created event
+    WorkflowTriggerService.triggerLeadCreated(workspaceId, lead).catch((err) => {
+      console.warn('[LeadService] Workflow trigger error:', err?.message || err);
     });
 
     return lead;

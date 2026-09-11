@@ -142,7 +142,7 @@ Phase 7 introduces deterministic, event-driven workflow automations into LeadFlo
   - Evaluates condition expressions against lead data and traverses the DAG step-by-step.
   - Guarded by a maximum traversal limit (50 steps) and node visitation tracking to fail safely and prevent runaway execution or process blocking.
   - Records execution audits in `WorkflowExecution` documents (`pending`, `running`, `completed`, `failed`).
-- **Current Limitation:** Asynchronous execution, queues (Redis/BullMQ), cron scheduling, and real workflow email delivery are deferred to Phase 8.
+- **Current Limitation (Resolved in Phase 8):** In Phase 7, workflow actions were synchronous dry-runs and `send_email` was deferred. Phase 8 transitions all workflow execution to asynchronous BullMQ queues backed by Redis with real email delivery.
 
 ### Workflow API Endpoints
 
@@ -153,4 +153,103 @@ All endpoints require authentication (`requireAuth`) and are strictly workspace-
 - `GET /api/workflows/:id` — Retrieve workflow by ID.
 - `PATCH /api/workflows/:id` — Update workflow (re-validates graph on structure or activation changes).
 - `DELETE /api/workflows/:id` — Soft-delete / archive workflow.
-- `POST /api/workflows/:id/test` — Test execution against a workspace lead (`{ "leadId": "..." }`).
+- `POST /api/workflows/:id/test` — Test execution against a workspace lead (`{ "leadId": "..." }`) — returns HTTP 202 Accepted.
+- `GET /api/workflows/executions/:executionId` — Retrieve execution record and live step log.
+- `GET /api/workflows/:id/executions` — Paginated history of executions for a workflow.
+
+---
+
+## Background Processing & Workflow Automation Engine (Phase 8)
+
+Phase 8 transitions workflow execution from synchronous HTTP handlers to a scalable, asynchronous background processing architecture powered by **BullMQ** and **Redis**, featuring dedicated workers, bounded retry policies, execution idempotency, real email dispatch, and non-breaking server startup.
+
+### Architecture Overview
+
+```text
+[HTTP Request / Event Trigger]
+  │ (e.g. Lead Created / POST /api/workflows/:id/test)
+  ▼
+[WorkflowTriggerService]
+  │ Creates WorkflowExecution record (status: 'pending')
+  ▼
+[BullMQ Queue: leadflow-workflows] ──► [Redis]
+                                         │
+                        Job Dispatched   ▼
+                              [Workflow Worker Process]
+                                         │
+                                         ▼
+                             [WorkflowExecutionService]
+                                         │
+                  ┌──────────────────────┴──────────────────────┐
+                  ▼                                             ▼
+          [Condition Node]                              [Action Node]
+       (Evaluates Lead Data)                                    │
+                                           ┌────────────────────┴────────────────────┐
+                                           ▼                                         ▼
+                                  [Send Email Action]                       [Update Lead Action]
+                               - Renders template with lead data         - Updates MongoDB Lead
+                               - Dispatches via EmailService             - Idempotent field update
+                               - Guarded by email idempotency
+```
+
+### Core Architecture Components
+
+1. **Redis Configuration & Resilient Startup:**
+   - Typed configuration loaded from environment variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_TLS`).
+   - Strict TLS certificate verification when TLS is enabled (`rejectUnauthorized: true`).
+   - Non-breaking server startup: if Redis is unavailable or unconfigured, the Express server boots cleanly. Unrelated API endpoints (auth, leads, templates, campaigns) operate normally.
+   - Any endpoint requiring background queueing cleanly throws HTTP 503 (`Background processing queue is currently unavailable.`) and records the execution as `failed`.
+
+2. **BullMQ Queue (`leadflow-workflows`):**
+   - **Retry Policy:** Bounded to 3 attempts with exponential backoff (`delay: 1000ms, type: 'exponential'`).
+   - **Job Retention:** Automatically removes completed jobs beyond 500 and failed jobs beyond 1,000 to conserve Redis memory.
+   - **Queue Availability Check:** Evaluates Redis connection readiness before attempting job operations to prevent hanging requests.
+
+3. **Execution Lifecycle & Idempotency:**
+   - **Lifecycle Transitions:** `pending` ➔ `running` ➔ `completed` / `failed`.
+   - **Execution Idempotency:** The worker inspects the database record before processing. If an execution is already `completed`, the job terminates immediately without re-running nodes.
+   - **Action Idempotency:** For `send_email` actions, the execution log is checked before dispatching. If the step previously succeeded in an earlier attempt, re-sending is bypassed to eliminate duplicate emails on retries.
+   - **Lead Updates:** Field modifications apply state directly to MongoDB idempotently.
+
+4. **Real Email Service Integration:**
+   - In `send_email` action nodes, active email templates in the matching workspace are resolved.
+   - Lead fields (`firstName`, `lastName`, `email`, `company`, etc.) are interpolated into template subject, HTML, and text via `renderTemplate`.
+   - Messages are dispatched via `EmailService.sendEmail` over configured SMTP infrastructure.
+
+5. **Trigger Automations:**
+   - `lead_created`: Hooked into `LeadService.createLead`. Creates and enqueues execution jobs for all active, unarchived workflows matching the workspace and trigger type.
+   - `manual`: Enqueued via `POST /api/workflows/:id/test` for isolated testing.
+
+6. **Worker Process & Graceful Shutdown:**
+   - Dedicated worker entrypoint: `server/src/workers/workflow.worker.ts`.
+   - Concurrency limit: defaults to 5 concurrent jobs.
+   - Graceful shutdown intercepts `SIGINT` and `SIGTERM` signals, closes the BullMQ worker safely, waits for active jobs to finish, and closes MongoDB connections cleanly.
+
+### Running the Worker
+
+The background worker runs as a dedicated Node.js process alongside the main Express API server:
+
+```bash
+# In server/ directory
+
+# Development mode with hot-reloading:
+npm run worker:dev
+
+# Production build and start:
+npm run build
+npm run worker:start
+```
+
+### Local Development Modes
+
+- **With Redis:**
+  - Start local Redis server (e.g. `redis-server` or Docker: `docker run -p 6379:6379 redis:alpine`).
+  - Configure `REDIS_HOST=127.0.0.1` and `REDIS_PORT=6379` in `server/.env`.
+  - Start the server (`npm run dev`) and worker (`npm run worker:dev`).
+  - Workflows queue and process in background smoothly.
+
+- **Without Redis (Graceful Fallback):**
+  - Omit Redis configuration or keep Redis stopped.
+  - Server starts normally and health check reports `redis: "disconnected"`.
+  - Workflow queue attempts safely return HTTP 503 with user-friendly error messages.
+
