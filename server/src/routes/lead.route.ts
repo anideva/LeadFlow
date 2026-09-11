@@ -13,11 +13,15 @@ import {
   validateLeadQuery,
   validateObjectId
 } from '../validators/lead.validator';
+import leadIngestionRoutes from './lead-ingestion.route';
 
 const router = Router();
 
 // All Lead CRM endpoints require authentication
 router.use(requireAuth);
+
+// Lead Ingestion routes (e.g. POST /api/leads/import/csv)
+router.use('/import', leadIngestionRoutes);
 
 router.post('/', validateCreateLead, createLead);
 router.get('/', validateLeadQuery, getLeads);
