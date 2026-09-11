@@ -109,3 +109,48 @@ Phase 6 introduces reusable Email Templates and Campaign models, preparing LeadF
   - **Campaign ↔ Template:** A campaign can only reference an active, unarchived template belonging to the identical workspace.
   - **Campaign ↔ Leads:** Leads are associated via a dedicated `CampaignLead` model with a unique compound index (`{ campaignId: 1, leadId: 1 }`). Cross-workspace and archived leads are rejected as invalid. Duplicate associations are prevented.
   - **Phase Boundary:** No campaign emails are sent in this phase; statuses (`draft`, `active`, `completed`, `paused` for campaigns; `pending`, `sent`, `failed` for campaign leads) represent lifecycle states only.
+
+---
+
+## Workflow Automation Foundation (Phase 7)
+
+Phase 7 introduces deterministic, event-driven workflow automations into LeadFlow, providing structured DAG validation, CRUD APIs, deterministic test execution, and a visual React Flow workflow editor.
+
+### Workflow Architecture & Core Concepts
+
+```text
+       Trigger Node (lead_created | lead_updated | manual)
+                                ↓
+                 Condition Node (lead_field evaluation)
+                        /              \
+                   [YES]                [NO]
+                    ↓                    ↓
+          Action: Send Email      Action: Update Lead
+          (Deferred to Phase 8)   (Synchronously executed)
+```
+
+- **Single Source of Truth:** The backend server strictly owns and validates workflow definitions and execution state. React Flow (`@xyflow/react`) is exclusively a UI representation and is never trusted as a security boundary.
+- **DAG Requirement:** Workflows must be Directed Acyclic Graphs (DAGs). Cycles are detected via DFS coloring and rejected. Disconnected nodes (nodes unreachable from the trigger) are strictly rejected.
+- **Single Trigger Rule:** Workflows require exactly ONE trigger node (`lead_created`, `lead_updated`, or `manual`). Workflows with 0 or >1 triggers are rejected.
+- **Supported Node Types:**
+  - `trigger`: Emits entry into the workflow (`lead_created`, `lead_updated`, `manual`).
+  - `condition`: Evaluates a lead field (`firstName`, `lastName`, `email`, `phone`, `company`, `source`, `status`, `priority`) using deterministic operators (`equals`, `not_equals`, `contains`, `not_contains`, `exists`, `not_exists`). Branches exclusively into `yes` and `no` handles.
+  - `action`:
+    - `send_email`: References an active email template in the same workspace. In Phase 7, this action is recognized and logged as deferred (`deferred_phase_8`) without sending real email.
+    - `update_lead`: Synchronously updates an allowed lead field (`firstName`, `lastName`, `email`, `phone`, `company`, `source`, `status`, `priority`) directly in MongoDB.
+- **Deterministic Execution Engine:**
+  - Evaluates condition expressions against lead data and traverses the DAG step-by-step.
+  - Guarded by a maximum traversal limit (50 steps) and node visitation tracking to fail safely and prevent runaway execution or process blocking.
+  - Records execution audits in `WorkflowExecution` documents (`pending`, `running`, `completed`, `failed`).
+- **Current Limitation:** Asynchronous execution, queues (Redis/BullMQ), cron scheduling, and real workflow email delivery are deferred to Phase 8.
+
+### Workflow API Endpoints
+
+All endpoints require authentication (`requireAuth`) and are strictly workspace-isolated:
+
+- `POST /api/workflows` — Create workflow (validates full graph and template references).
+- `GET /api/workflows` — List workflows (filtered by status, triggerType, search).
+- `GET /api/workflows/:id` — Retrieve workflow by ID.
+- `PATCH /api/workflows/:id` — Update workflow (re-validates graph on structure or activation changes).
+- `DELETE /api/workflows/:id` — Soft-delete / archive workflow.
+- `POST /api/workflows/:id/test` — Test execution against a workspace lead (`{ "leadId": "..." }`).

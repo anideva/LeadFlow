@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
+import { WorkflowList } from './pages/WorkflowList';
+import { WorkflowEditor } from './pages/WorkflowEditor';
 
 interface HealthStatus {
   status: string;
@@ -8,8 +10,11 @@ interface HealthStatus {
 }
 
 export function App() {
+  const [activeTab, setActiveTab] = useState<'workflows' | 'editor' | 'health'>('workflows');
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+
   const [health, setHealth] = useState<HealthStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   useEffect(() => {
     fetch('/api/health')
@@ -18,26 +23,127 @@ export function App() {
         return res.json();
       })
       .then((data: HealthStatus) => setHealth(data))
-      .catch((err) => setError(err.message));
+      .catch((err) => setHealthError(err.message));
   }, []);
 
+  const handleCreateNew = () => {
+    setSelectedWorkflowId(null);
+    setActiveTab('editor');
+  };
+
+  const handleSelectWorkflow = (id: string) => {
+    setSelectedWorkflowId(id);
+    setActiveTab('editor');
+  };
+
+  const handleBackToList = () => {
+    setSelectedWorkflowId(null);
+    setActiveTab('workflows');
+  };
+
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
-      <h1>LeadFlow</h1>
-      <p>Omnichannel Lead Generation & Workflow Automation Platform</p>
-      
-      <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #ccc', borderRadius: '8px' }}>
-        <h3>Backend API Status</h3>
-        {health && (
-          <div>
-            <p><strong>Status:</strong> {health.status}</p>
-            <p><strong>Service:</strong> {health.service}</p>
-            <p><strong>Timestamp:</strong> {health.timestamp}</p>
+    <div style={{ fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif', minHeight: '100vh', backgroundColor: '#f9fafb' }}>
+      {/* Global Navigation Header */}
+      <header
+        style={{
+          backgroundColor: '#ffffff',
+          borderBottom: '1px solid #e5e7eb',
+          padding: '0.75rem 2rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '1.25rem', fontWeight: 800, color: '#1e40af' }}>LeadFlow</span>
+            <span
+              style={{
+                fontSize: '0.7rem',
+                backgroundColor: '#dbeafe',
+                color: '#1e40af',
+                padding: '0.15rem 0.4rem',
+                borderRadius: '4px',
+                fontWeight: 600
+              }}
+            >
+              Phase 7
+            </span>
+          </div>
+
+          <nav style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={handleBackToList}
+              style={{
+                padding: '0.4rem 0.8rem',
+                border: 'none',
+                borderRadius: '6px',
+                backgroundColor: activeTab === 'workflows' || activeTab === 'editor' ? '#eff6ff' : 'transparent',
+                color: activeTab === 'workflows' || activeTab === 'editor' ? '#1d4ed8' : '#4b5563',
+                fontWeight: 600,
+                fontSize: '0.875rem',
+                cursor: 'pointer'
+              }}
+            >
+              Workflows
+            </button>
+            <button
+              onClick={() => setActiveTab('health')}
+              style={{
+                padding: '0.4rem 0.8rem',
+                border: 'none',
+                borderRadius: '6px',
+                backgroundColor: activeTab === 'health' ? '#eff6ff' : 'transparent',
+                color: activeTab === 'health' ? '#1d4ed8' : '#4b5563',
+                fontWeight: 600,
+                fontSize: '0.875rem',
+                cursor: 'pointer'
+              }}
+            >
+              System Health
+            </button>
+          </nav>
+        </div>
+
+        <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>
+          LeadFlow Platform &bull; Automated Workflow Engine
+        </div>
+      </header>
+
+      {/* Main Content Area */}
+      <main>
+        {activeTab === 'workflows' && (
+          <WorkflowList
+            onSelectWorkflow={handleSelectWorkflow}
+            onCreateNew={handleCreateNew}
+          />
+        )}
+
+        {activeTab === 'editor' && (
+          <WorkflowEditor
+            workflowId={selectedWorkflowId}
+            onBack={handleBackToList}
+          />
+        )}
+
+        {activeTab === 'health' && (
+          <div style={{ padding: '2rem', maxWidth: '600px', margin: '0 auto' }}>
+            <div style={{ padding: '1.5rem', backgroundColor: '#fff', border: '1px solid #e5e7eb', borderRadius: '8px' }}>
+              <h3 style={{ margin: '0 0 1rem 0', color: '#111827' }}>Backend API Status</h3>
+              {health && (
+                <div style={{ fontSize: '0.875rem', lineHeight: 1.6 }}>
+                  <p><strong>Status:</strong> <span style={{ color: '#15803d', fontWeight: 600 }}>{health.status}</span></p>
+                  <p><strong>Service:</strong> {health.service}</p>
+                  <p><strong>Uptime:</strong> {health.uptime.toFixed(1)} seconds</p>
+                  <p><strong>Timestamp:</strong> {health.timestamp}</p>
+                </div>
+              )}
+              {healthError && <p style={{ color: '#dc2626', fontSize: '0.875rem' }}>Backend connection error: {healthError}</p>}
+              {!health && !healthError && <p style={{ color: '#6b7280' }}>Connecting to backend API...</p>}
+            </div>
           </div>
         )}
-        {error && <p style={{ color: 'red' }}>Backend connection error: {error}</p>}
-        {!health && !error && <p>Connecting to backend API...</p>}
-      </div>
+      </main>
     </div>
   );
 }
