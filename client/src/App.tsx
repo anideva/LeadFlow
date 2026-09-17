@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { WorkflowList } from './pages/WorkflowList';
 import { WorkflowEditor } from './pages/WorkflowEditor';
+import { LeadDiscovery } from './pages/LeadDiscovery';
 
 interface HealthStatus {
   status: string;
@@ -10,7 +11,7 @@ interface HealthStatus {
 }
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'workflows' | 'editor' | 'health'>('workflows');
+  const [activeTab, setActiveTab] = useState<'discovery' | 'workflows' | 'editor' | 'health'>('discovery');
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
 
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -67,11 +68,29 @@ export function App() {
                 fontWeight: 600
               }}
             >
-              Phase 7
+              Phase 9
             </span>
           </div>
 
           <nav style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              onClick={() => {
+                setSelectedWorkflowId(null);
+                setActiveTab('discovery');
+              }}
+              style={{
+                padding: '0.4rem 0.8rem',
+                border: 'none',
+                borderRadius: '6px',
+                backgroundColor: activeTab === 'discovery' ? '#eff6ff' : 'transparent',
+                color: activeTab === 'discovery' ? '#1d4ed8' : '#4b5563',
+                fontWeight: 600,
+                fontSize: '0.875rem',
+                cursor: 'pointer'
+              }}
+            >
+              Lead Discovery
+            </button>
             <button
               onClick={handleBackToList}
               style={{
@@ -106,12 +125,14 @@ export function App() {
         </div>
 
         <div style={{ fontSize: '0.8rem', color: '#6b7280' }}>
-          LeadFlow Platform &bull; Automated Workflow Engine
+          LeadFlow Platform &bull; Omnichannel Lead Engine
         </div>
       </header>
 
       {/* Main Content Area */}
       <main>
+        {activeTab === 'discovery' && <LeadDiscovery />}
+
         {activeTab === 'workflows' && (
           <WorkflowList
             onSelectWorkflow={handleSelectWorkflow}

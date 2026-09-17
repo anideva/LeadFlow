@@ -253,3 +253,82 @@ npm run worker:start
   - Server starts normally and health check reports `redis: "disconnected"`.
   - Workflow queue attempts safely return HTTP 503 with user-friendly error messages.
 
+---
+
+## Generic Lead Discovery & Research (Phase 9)
+
+Phase 9 introduces a generic, domain-agnostic prospect research and discovery engine to LeadFlow. It enables users to discover both individual professionals and commercial businesses across any location, industry, or profession using natural language queries, and convert discovered prospects directly into CRM leads with a single click.
+
+### Architectural Overview
+
+```text
+[Frontend Search UI] ──(Natural Language Query)──► [POST /api/discovery/search]
+                                                            │
+                                                            ▼
+                                                   [DiscoveryService]
+                                                            │
+                                                            ▼
+                                                [IDiscoveryProvider]
+                                                            │
+                                       ┌────────────────────┴────────────────────┐
+                                       ▼                                         ▼
+                        [DevelopmentDiscoveryProvider]               [Future Live Provider]
+                        - Dynamic Intent Extraction                  (Google Places, Apollo,
+                        - Dynamic Prospect Synthesis                  Clearbit, Custom APIs)
+                        - Zero Hardcoded Dictionaries
+                                       │
+                                       ▼
+                       [Transient DiscoveredProspect[]]
+                                       │
+       [User clicks "+ Save as Lead"]  ▼
+                          [POST /api/discovery/convert]
+                                       │
+                                       ▼
+                               [LeadService.createLead]
+                               - Deduplication by email
+                               - Workspace isolation
+                               - Source: 'discovery'
+                                       │
+                                       ▼
+                       [WorkflowTriggerService.triggerLeadCreated]
+                       - Fires Phase 7/8 Background Workflows
+```
+
+### Core Design Principles
+
+1. **Domain-Agnostic & Truly Generic:**
+   - Zero hardcoded industries (not just dental or tech; flowers, logistics, fitness, law, etc.).
+   - Zero hardcoded locations (Jaipur, Guwahati, Bangalore, London, Tokyo, etc.).
+   - Zero hardcoded personas or salespeople.
+   - Dual-entity discovery: supports both individual professionals (`firstName`, `lastName`, `title`) and commercial businesses (`company`, `website`, `address`).
+
+2. **Decoupled Provider Architecture (`IDiscoveryProvider`):**
+   - Clean interface contract: `search(request: DiscoverySearchRequest): Promise<DiscoverySearchResult>`.
+   - Pluggable: swap sandbox with live commercial data sources (Google Places, Apollo, ZoomInfo) without modifying controllers, services, or frontend code.
+   - Initial provider: `DevelopmentDiscoveryProvider` (transparent sandbox, zero API keys, ₹0 cost).
+
+3. **Development Discovery Provider:**
+   - Intelligently extracts intent (`category`, `location`, `entityType`) from raw freeform queries (e.g. *"Find dentists in Guwahati"*, *"Flower shops in Jaipur"*, *"Software companies in Bangalore"*).
+   - Synthesizes realistic, deterministic prospect profiles with verified business domains, corporate emails, phone numbers, addresses, and social profile links.
+   - Identifies whether the search targets individual practitioners or organizations based on lexical cues.
+
+4. **Single-Click CRM Conversion:**
+   - Prospects are transient discovery objects until converted.
+   - `POST /api/discovery/convert` converts a `DiscoveredProspect` into a persistent `Lead` record in MongoDB.
+   - Reuses existing `LeadService.createLead` to enforce workspace isolation, required field validation, and duplicate email prevention.
+   - Automatically invokes `WorkflowTriggerService.triggerLeadCreated`, immediately bridging newly discovered leads into Phase 7 & 8 workflow automation pipelines.
+
+### Discovery REST API Endpoints
+
+All endpoints require authentication (`requireAuth`) and are workspace-isolated:
+
+- **Search Prospects:**
+  - `POST /api/discovery/search`
+  - Body: `{ "query": "Flower shops in Jaipur", "limit": 10 }`
+  - Response: `{ "query": "...", "total": 10, "provider": "development-discovery", "prospects": [...] }`
+
+- **Convert Prospect to CRM Lead:**
+  - `POST /api/discovery/convert`
+  - Body: `{ "prospect": { ...DiscoveredProspect } }`
+  - Response: `{ "message": "Prospect successfully converted to lead", "lead": { ...Lead } }`
+  - Returns `409 Conflict` if a lead with the same email already exists in the workspace.
