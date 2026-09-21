@@ -2,6 +2,11 @@ import { Types } from 'mongoose';
 import { Lead, ILead, LeadStatus, LeadPriority } from '../models/Lead.model';
 import { AppError } from '../utils/error.util';
 import { WorkflowTriggerService } from './workflow-trigger.service';
+import {
+  BulkOperationSanitized,
+  BulkLeadAction,
+  LeadExportQuerySanitized
+} from '../validators/lead.validator';
 
 export interface CreateLeadDTO {
   firstName: string;
@@ -229,4 +234,142 @@ export class LeadService {
       isArchived: true
     };
   }
+
+  /**
+   * Performs bulk operations (status update, priority update, or archive)
+   * on a list of leads strictly scoped to the authenticated workspace.
+   * Soft-deleted/archived leads are excluded from active operations.
+   */
+  public static async bulkLeadOperation(
+    workspaceId: string,
+    operation: BulkOperationSanitized
+  ): Promise<{
+    operation: BulkLeadAction;
+    targetedCount: number;
+    matchedCount: number;
+    modifiedCount: number;
+  }> {
+    const objectIds = operation.leadIds.map((id) => new Types.ObjectId(id));
+
+    // Multi-tenant isolation: enforce workspace and unarchived status directly in the query
+    const filter: Record<string, any> = {
+      workspaceId: new Types.ObjectId(workspaceId),
+      _id: { $in: objectIds },
+      isArchived: false
+    };
+
+    let updateDoc: Record<string, any> = {};
+
+    if (operation.action === 'update_status') {
+      updateDoc = { $set: { status: operation.status } };
+    } else if (operation.action === 'update_priority') {
+      updateDoc = { $set: { priority: operation.priority } };
+    } else if (operation.action === 'archive') {
+      updateDoc = { $set: { isArchived: true } };
+    }
+
+    const updateResult = await Lead.updateMany(filter, updateDoc);
+
+    return {
+      operation: operation.action,
+      targetedCount: operation.leadIds.length,
+      matchedCount: updateResult.matchedCount,
+      modifiedCount: updateResult.modifiedCount
+    };
+  }
+
+  /**
+   * Exports leads belonging to the workspace matching the specified query or ID filter as RFC 4180 CSV.
+   * Archived leads are excluded.
+   */
+  public static async exportLeads(
+    workspaceId: string,
+    query: LeadExportQuerySanitized
+  ): Promise<{ csv: string; count: number; filename: string }> {
+    const filter: Record<string, any> = {
+      workspaceId: new Types.ObjectId(workspaceId),
+      isArchived: false
+    };
+
+    if (query.leadIds && query.leadIds.length > 0) {
+      const objectIds = query.leadIds.map((id) => new Types.ObjectId(id));
+      filter._id = { $in: objectIds };
+    } else {
+      if (query.search && query.search.trim().length > 0) {
+        const escapedSearch = query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const searchRegex = new RegExp(escapedSearch, 'i');
+        filter.$or = [
+          { firstName: searchRegex },
+          { lastName: searchRegex },
+          { email: searchRegex },
+          { phone: searchRegex },
+          { company: searchRegex }
+        ];
+      }
+
+      if (query.status) {
+        filter.status = query.status;
+      }
+
+      if (query.priority) {
+        filter.priority = query.priority;
+      }
+
+      if (query.source) {
+        filter.source = query.source;
+      }
+    }
+
+    const leads = await Lead.find(filter)
+      .sort({ createdAt: -1, _id: -1 })
+      .lean();
+
+    const headers = [
+      'firstName',
+      'lastName',
+      'email',
+      'phone',
+      'company',
+      'source',
+      'status',
+      'priority',
+      'notes',
+      'createdAt'
+    ];
+
+    const escapeCsvValue = (val: any): string => {
+      if (val === null || val === undefined) return '';
+      const str = String(val);
+      if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = leads.map((lead) => {
+      return [
+        escapeCsvValue(lead.firstName),
+        escapeCsvValue(lead.lastName),
+        escapeCsvValue(lead.email),
+        escapeCsvValue(lead.phone),
+        escapeCsvValue(lead.company),
+        escapeCsvValue(lead.source),
+        escapeCsvValue(lead.status),
+        escapeCsvValue(lead.priority),
+        escapeCsvValue(lead.notes),
+        escapeCsvValue(lead.createdAt ? new Date(lead.createdAt).toISOString() : '')
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\r\n');
+    const dateStr = new Date().toISOString().split('T')[0];
+    const filename = `leadflow-leads-${dateStr}.csv`;
+
+    return {
+      csv: csvContent,
+      count: leads.length,
+      filename
+    };
+  }
 }
+

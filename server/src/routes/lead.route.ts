@@ -4,14 +4,18 @@ import {
   getLeads,
   getLeadById,
   updateLead,
-  archiveLead
+  archiveLead,
+  bulkUpdateLeads,
+  exportLeadsCsv
 } from '../controllers/lead.controller';
 import { requireAuth } from '../middlewares/auth.middleware';
 import {
   validateCreateLead,
   validateUpdateLead,
   validateLeadQuery,
-  validateObjectId
+  validateObjectId,
+  validateBulkLeadOperation,
+  validateLeadExportQuery
 } from '../validators/lead.validator';
 import leadIngestionRoutes from './lead-ingestion.route';
 
@@ -25,6 +29,8 @@ router.use('/import', leadIngestionRoutes);
 
 router.post('/', validateCreateLead, createLead);
 router.get('/', validateLeadQuery, getLeads);
+router.get('/export', validateLeadExportQuery, exportLeadsCsv);
+router.patch('/bulk', validateBulkLeadOperation, bulkUpdateLeads);
 router.get('/:id', validateObjectId, getLeadById);
 router.patch('/:id', validateObjectId, validateUpdateLead, updateLead);
 router.delete('/:id', validateObjectId, archiveLead);

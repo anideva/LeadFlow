@@ -167,3 +167,121 @@ export async function archiveLead(id: string): Promise<{ id: string; isArchived:
 
   return data.data;
 }
+
+export type BulkLeadAction = 'update_status' | 'update_priority' | 'archive';
+
+export interface BulkLeadPayload {
+  leadIds: string[];
+  action: BulkLeadAction;
+  status?: LeadStatus;
+  priority?: LeadPriority;
+}
+
+export interface BulkLeadResult {
+  operation: BulkLeadAction;
+  targetedCount: number;
+  matchedCount: number;
+  modifiedCount: number;
+}
+
+export interface BulkLeadResponse {
+  success: boolean;
+  message: string;
+  data: BulkLeadResult;
+}
+
+export interface LeadExportOptions {
+  leadIds?: string[];
+  search?: string;
+  status?: LeadStatus | '';
+  priority?: LeadPriority | '';
+  source?: string;
+}
+
+/**
+ * Executes a bulk operation (status update, priority update, or archive)
+ * across multiple leads within the user's workspace.
+ */
+export async function bulkLeadOperation(payload: BulkLeadPayload): Promise<BulkLeadResponse> {
+  const res = await fetch('/api/leads/bulk', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(payload)
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to process bulk operation');
+  }
+
+  return data;
+}
+
+/**
+ * Requests a CSV export of leads (either specific selected IDs or filtered results)
+ * and triggers a native browser download with the server-provided filename.
+ */
+export async function downloadLeadsCsv(options: LeadExportOptions = {}): Promise<{ filename: string; blob: Blob }> {
+  const params = new URLSearchParams();
+
+  if (options.leadIds && options.leadIds.length > 0) {
+    params.set('leadIds', options.leadIds.join(','));
+  } else {
+    if (options.search && options.search.trim()) {
+      params.set('search', options.search.trim());
+    }
+    if (options.status && options.status.trim()) {
+      params.set('status', options.status.trim());
+    }
+    if (options.priority && options.priority.trim()) {
+      params.set('priority', options.priority.trim());
+    }
+    if (options.source && options.source.trim()) {
+      params.set('source', options.source.trim());
+    }
+  }
+
+  const queryString = params.toString();
+  const url = queryString ? `/api/leads/export?${queryString}` : '/api/leads/export';
+
+  const res = await fetch(url, {
+    method: 'GET',
+    credentials: 'include'
+  });
+
+  if (!res.ok) {
+    let errorMsg = 'Failed to export CSV';
+    try {
+      const errJson = await res.json();
+      if (errJson.error) errorMsg = errJson.error;
+    } catch {
+      // not json
+    }
+    throw new Error(errorMsg);
+  }
+
+  let filename = 'leadflow-leads.csv';
+  const disposition = res.headers.get('Content-Disposition');
+  if (disposition && disposition.includes('filename=')) {
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    if (match && match[1]) {
+      filename = match[1];
+    }
+  }
+
+  const blob = await res.blob();
+
+  // Create temporary object URL and trigger browser download
+  const objectUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(objectUrl);
+
+  return { filename, blob };
+}
+

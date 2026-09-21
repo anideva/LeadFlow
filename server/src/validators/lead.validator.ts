@@ -339,3 +339,212 @@ export const validateLeadQuery = (req: Request, res: Response, next: NextFunctio
 
   next();
 };
+
+export type BulkLeadAction = 'update_status' | 'update_priority' | 'archive';
+
+export interface BulkOperationSanitized {
+  action: BulkLeadAction;
+  leadIds: string[];
+  status?: LeadStatus;
+  priority?: LeadPriority;
+}
+
+export interface LeadExportQuerySanitized {
+  leadIds?: string[];
+  search?: string;
+  status?: LeadStatus;
+  priority?: LeadPriority;
+  source?: string;
+}
+
+/**
+ * Validates request body for PATCH /api/leads/bulk.
+ */
+export const validateBulkLeadOperation = (req: Request, res: Response, next: NextFunction): void => {
+  if (!req.body || typeof req.body !== 'object') {
+    res.status(400).json({
+      success: false,
+      error: 'Request body must be an object.'
+    });
+    return;
+  }
+
+  const { leadIds, action, status, priority } = req.body;
+
+  // 1. Validate leadIds array
+  if (!Array.isArray(leadIds)) {
+    res.status(400).json({
+      success: false,
+      error: 'Field "leadIds" must be an array of lead IDs.'
+    });
+    return;
+  }
+
+  if (leadIds.length === 0) {
+    res.status(400).json({
+      success: false,
+      error: 'Field "leadIds" cannot be empty.'
+    });
+    return;
+  }
+
+  if (leadIds.length > 200) {
+    res.status(400).json({
+      success: false,
+      error: 'Bulk operations are capped at a maximum of 200 leads per request.'
+    });
+    return;
+  }
+
+  // Deduplicate and validate ObjectIds
+  const uniqueIds = Array.from(new Set(leadIds.map((id: any) => String(id).trim())));
+  for (const id of uniqueIds) {
+    if (!id || !Types.ObjectId.isValid(id)) {
+      res.status(400).json({
+        success: false,
+        error: `Invalid lead ID format: "${id}".`
+      });
+      return;
+    }
+  }
+
+  // 2. Determine and validate action
+  let resolvedAction: BulkLeadAction | undefined = undefined;
+
+  if (action !== undefined && action !== null && action !== '') {
+    if (action === 'update_status' || action === 'update_priority' || action === 'archive') {
+      resolvedAction = action as BulkLeadAction;
+    } else {
+      res.status(400).json({
+        success: false,
+        error: `Unsupported bulk action "${action}". Allowed actions: update_status, update_priority, archive.`
+      });
+      return;
+    }
+  } else {
+    // Infer action from payload fields
+    if (status !== undefined) {
+      resolvedAction = 'update_status';
+    } else if (priority !== undefined) {
+      resolvedAction = 'update_priority';
+    }
+  }
+
+  if (!resolvedAction) {
+    res.status(400).json({
+      success: false,
+      error: 'A valid bulk action (update_status, update_priority, archive) or field (status, priority) must be specified.'
+    });
+    return;
+  }
+
+  const sanitized: BulkOperationSanitized = {
+    action: resolvedAction,
+    leadIds: uniqueIds
+  };
+
+  if (resolvedAction === 'update_status') {
+    if (!status || !LEAD_STATUS_VALUES.includes(status as LeadStatus)) {
+      res.status(400).json({
+        success: false,
+        error: `Valid "status" is required for status updates. Must be one of: ${LEAD_STATUS_VALUES.join(', ')}.`
+      });
+      return;
+    }
+    sanitized.status = status as LeadStatus;
+  } else if (resolvedAction === 'update_priority') {
+    if (!priority || !LEAD_PRIORITY_VALUES.includes(priority as LeadPriority)) {
+      res.status(400).json({
+        success: false,
+        error: `Valid "priority" is required for priority updates. Must be one of: ${LEAD_PRIORITY_VALUES.join(', ')}.`
+      });
+      return;
+    }
+    sanitized.priority = priority as LeadPriority;
+  }
+
+  (req as any).bulkOperation = sanitized;
+  next();
+};
+
+/**
+ * Validates query parameters for GET /api/leads/export.
+ */
+export const validateLeadExportQuery = (req: Request, res: Response, next: NextFunction): void => {
+  const { leadIds, search, status, priority, source } = req.query;
+
+  const sanitized: LeadExportQuerySanitized = {};
+
+  // If specific leadIds are requested for export
+  if (leadIds !== undefined && leadIds !== '') {
+    let rawIds: string[] = [];
+    if (Array.isArray(leadIds)) {
+      rawIds = leadIds.map((id) => String(id).trim());
+    } else if (typeof leadIds === 'string') {
+      rawIds = leadIds.split(',').map((id) => id.trim()).filter(Boolean);
+    }
+
+    if (rawIds.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: 'Query parameter "leadIds" must contain at least one valid lead ID.'
+      });
+      return;
+    }
+
+    if (rawIds.length > 500) {
+      res.status(400).json({
+        success: false,
+        error: 'Export by ID is capped at 500 leads per request.'
+      });
+      return;
+    }
+
+    for (const id of rawIds) {
+      if (!Types.ObjectId.isValid(id)) {
+        res.status(400).json({
+          success: false,
+          error: `Invalid lead ID format in export query: "${id}".`
+        });
+        return;
+      }
+    }
+
+    sanitized.leadIds = Array.from(new Set(rawIds));
+  } else {
+    // Filter-based export
+    if (typeof search === 'string' && search.trim().length > 0) {
+      sanitized.search = search.trim();
+    }
+
+    if (status !== undefined && status !== '') {
+      if (!LEAD_STATUS_VALUES.includes(status as LeadStatus)) {
+        res.status(400).json({
+          success: false,
+          error: `Status filter must be one of: ${LEAD_STATUS_VALUES.join(', ')}.`
+        });
+        return;
+      }
+      sanitized.status = status as LeadStatus;
+    }
+
+    if (priority !== undefined && priority !== '') {
+      if (!LEAD_PRIORITY_VALUES.includes(priority as LeadPriority)) {
+        res.status(400).json({
+          success: false,
+          error: `Priority filter must be one of: ${LEAD_PRIORITY_VALUES.join(', ')}.`
+        });
+        return;
+      }
+      sanitized.priority = priority as LeadPriority;
+    }
+
+    if (typeof source === 'string' && source.trim().length > 0) {
+      sanitized.source = source.trim();
+    }
+  }
+
+  (req as any).leadExportQuery = sanitized;
+  next();
+};
+

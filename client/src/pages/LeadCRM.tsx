@@ -3,6 +3,8 @@ import {
   getLeads,
   updateLead,
   archiveLead,
+  bulkLeadOperation,
+  downloadLeadsCsv,
   Lead,
   LeadStatus,
   LeadPriority,
@@ -50,6 +52,13 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
   const [priorityFilter, setPriorityFilter] = useState<LeadPriority | ''>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
+
+  // Multi-Select & Bulk Operations State
+  const [selectedLeadIds, setSelectedLeadIds] = useState<string[]>([]);
+  const [bulkProcessing, setBulkProcessing] = useState<boolean>(false);
+  const [bulkArchiveModalOpen, setBulkArchiveModalOpen] = useState<boolean>(false);
+  const [exportingCsv, setExportingCsv] = useState<boolean>(false);
+  const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
 
   // Selected Lead for Detail / Edit Modal
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -115,6 +124,158 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
   useEffect(() => {
     fetchLeads();
   }, [fetchLeads]);
+
+  // Reconcile and clear selection when page, search query, or filters change
+  useEffect(() => {
+    setSelectedLeadIds([]);
+  }, [currentPage, pageSize, debouncedSearch, statusFilter, priorityFilter]);
+
+  // Sync indeterminate state of the select-all checkbox
+  const isAllVisibleSelected = leads.length > 0 && leads.every((l) => selectedLeadIds.includes(l._id));
+  const isSomeVisibleSelected = leads.some((l) => selectedLeadIds.includes(l._id));
+
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = isSomeVisibleSelected && !isAllVisibleSelected;
+    }
+  }, [isSomeVisibleSelected, isAllVisibleSelected]);
+
+  // Handle toggling select-all on visible leads
+  const handleToggleSelectAll = () => {
+    if (isAllVisibleSelected) {
+      // Deselect all visible leads
+      setSelectedLeadIds((prev) => prev.filter((id) => !leads.some((l) => l._id === id)));
+    } else {
+      // Select all visible leads
+      const visibleIds = leads.map((l) => l._id);
+      setSelectedLeadIds((prev) => Array.from(new Set([...prev, ...visibleIds])));
+    }
+  };
+
+  // Handle toggling a single lead row selection
+  const handleToggleSelectRow = (leadId: string) => {
+    setSelectedLeadIds((prev) =>
+      prev.includes(leadId) ? prev.filter((id) => id !== leadId) : [...prev, leadId]
+    );
+  };
+
+  // Handle bulk status change
+  const handleBulkStatusChange = async (newStatus: LeadStatus) => {
+    if (selectedLeadIds.length === 0) return;
+
+    try {
+      setBulkProcessing(true);
+      setError(null);
+
+      const res = await bulkLeadOperation({
+        leadIds: selectedLeadIds,
+        action: 'update_status',
+        status: newStatus
+      });
+
+      setSuccessMsg(`Successfully updated status to "${newStatus}" for ${res.data.modifiedCount} lead(s).`);
+      setSelectedLeadIds([]);
+      await fetchLeads();
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to update status in bulk.');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  // Handle bulk priority change
+  const handleBulkPriorityChange = async (newPriority: LeadPriority) => {
+    if (selectedLeadIds.length === 0) return;
+
+    try {
+      setBulkProcessing(true);
+      setError(null);
+
+      const res = await bulkLeadOperation({
+        leadIds: selectedLeadIds,
+        action: 'update_priority',
+        priority: newPriority
+      });
+
+      setSuccessMsg(`Successfully updated priority to "${newPriority}" for ${res.data.modifiedCount} lead(s).`);
+      setSelectedLeadIds([]);
+      await fetchLeads();
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to update priority in bulk.');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  // Handle bulk archive confirmation
+  const handleBulkArchiveConfirm = async () => {
+    if (selectedLeadIds.length === 0) return;
+
+    try {
+      setBulkProcessing(true);
+      setError(null);
+
+      const res = await bulkLeadOperation({
+        leadIds: selectedLeadIds,
+        action: 'archive'
+      });
+
+      setSuccessMsg(`Successfully archived ${res.data.modifiedCount} lead(s).`);
+      setBulkArchiveModalOpen(false);
+      setSelectedLeadIds([]);
+      await fetchLeads();
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to archive leads in bulk.');
+    } finally {
+      setBulkProcessing(false);
+    }
+  };
+
+  // Handle Export Current Filtered Results
+  const handleExportCurrentResults = async () => {
+    try {
+      setExportingCsv(true);
+      setError(null);
+
+      const { filename } = await downloadLeadsCsv({
+        search: debouncedSearch,
+        status: statusFilter,
+        priority: priorityFilter
+      });
+
+      setSuccessMsg(`Exported CRM results to "${filename}".`);
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export CRM results as CSV.');
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
+  // Handle Export Selected Leads
+  const handleExportSelectedCsv = async () => {
+    if (selectedLeadIds.length === 0) return;
+
+    try {
+      setExportingCsv(true);
+      setError(null);
+
+      const { filename } = await downloadLeadsCsv({
+        leadIds: selectedLeadIds
+      });
+
+      setSuccessMsg(`Exported ${selectedLeadIds.length} selected lead(s) to "${filename}".`);
+      setTimeout(() => setSuccessMsg(null), 4000);
+    } catch (err: any) {
+      setError(err.message || 'Failed to export selected leads as CSV.');
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
 
   // Handle opening View/Edit modal
   const handleOpenLeadModal = (lead: Lead, tab: 'details' | 'edit' = 'details') => {
@@ -544,29 +705,56 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
           )}
         </div>
 
-        {/* Refresh button */}
-        <button
-          type="button"
-          onClick={fetchLeads}
-          disabled={loading}
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.35rem',
-            padding: '0.55rem 0.85rem',
-            borderRadius: '6px',
-            border: '1px solid #d1d5db',
-            backgroundColor: '#ffffff',
-            color: '#374151',
-            fontSize: '0.875rem',
-            fontWeight: 500,
-            cursor: loading ? 'not-allowed' : 'pointer'
-          }}
-        >
-          <span>🔄</span>
-          <span>{loading ? 'Refreshing...' : 'Refresh'}</span>
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          {/* Export Current Filtered Results CSV */}
+          <button
+            type="button"
+            onClick={handleExportCurrentResults}
+            disabled={exportingCsv || pagination.total === 0}
+            aria-label="Export current filtered leads to CSV"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              padding: '0.55rem 0.85rem',
+              borderRadius: '6px',
+              border: '1px solid #d1d5db',
+              backgroundColor: '#ffffff',
+              color: '#374151',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              cursor: exportingCsv || pagination.total === 0 ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <span>📥</span>
+            <span>{exportingCsv ? 'Exporting...' : 'Export Results (CSV)'}</span>
+          </button>
+
+          {/* Refresh button */}
+          <button
+            type="button"
+            onClick={fetchLeads}
+            disabled={loading}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.35rem',
+              padding: '0.55rem 0.85rem',
+              borderRadius: '6px',
+              border: '1px solid #d1d5db',
+              backgroundColor: '#ffffff',
+              color: '#374151',
+              fontSize: '0.875rem',
+              fontWeight: 500,
+              cursor: loading ? 'not-allowed' : 'pointer'
+            }}
+          >
+            <span>🔄</span>
+            <span>{loading ? 'Refreshing...' : 'Refresh'}</span>
+          </button>
+        </div>
       </div>
+
 
       {/* Main Content: Table or Empty State */}
       {loading && leads.length === 0 ? (
@@ -654,53 +842,238 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
           )}
         </div>
       ) : (
-        /* Leads Table Container */
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            borderRadius: '10px',
-            border: '1px solid #e5e7eb',
-            overflow: 'hidden',
-            boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
-          }}
-        >
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
-              <thead>
-                <tr style={{ backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb', color: '#4b5563' }}>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Lead Name</th>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Company</th>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Contact Info</th>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Source</th>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Status</th>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Priority</th>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Added</th>
-                  <th style={{ padding: '0.75rem 1rem', fontWeight: 600, textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {leads.map((lead) => {
-                  const statusStyle = getStatusBadgeStyle(lead.status);
-                  const priorityStyle = getPriorityBadgeStyle(lead.priority);
-                  const fullName = `${lead.firstName} ${lead.lastName || ''}`.trim();
-                  const createdDate = new Date(lead.createdAt).toLocaleDateString(undefined, {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric'
-                  });
+        <>
+          {/* Bulk Action Toolbar */}
+          {selectedLeadIds.length > 0 && (
+            <div
+              role="region"
+              aria-label="Bulk actions toolbar"
+              style={{
+                backgroundColor: '#1e293b',
+                color: '#ffffff',
+                padding: '0.75rem 1.25rem',
+                borderRadius: '8px',
+                marginBottom: '1rem',
+                display: 'flex',
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.75rem',
+                boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <span
+                  style={{
+                    backgroundColor: '#2563eb',
+                    color: '#ffffff',
+                    padding: '0.25rem 0.65rem',
+                    borderRadius: '9999px',
+                    fontSize: '0.8rem',
+                    fontWeight: 700
+                  }}
+                >
+                  {selectedLeadIds.length} {selectedLeadIds.length === 1 ? 'lead' : 'leads'} selected
+                </span>
+                <span style={{ fontSize: '0.875rem', color: '#cbd5e1', fontWeight: 500 }}>
+                  Bulk Actions:
+                </span>
+              </div>
 
-                  return (
-                    <tr
-                      key={lead._id}
-                      style={{
-                        borderBottom: '1px solid #f3f4f6',
-                        transition: 'background-color 0.1s'
-                      }}
-                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = '#fafafa')}
-                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '#ffffff')}
-                    >
-                      {/* Name Column */}
-                      <td style={{ padding: '0.85rem 1rem' }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem' }}>
+                {/* Change Status Dropdown */}
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) handleBulkStatusChange(e.target.value as LeadStatus);
+                  }}
+                  disabled={bulkProcessing}
+                  aria-label="Change status of selected leads"
+                  style={{
+                    padding: '0.4rem 0.65rem',
+                    borderRadius: '6px',
+                    border: '1px solid #475569',
+                    backgroundColor: '#334155',
+                    color: '#ffffff',
+                    fontSize: '0.825rem',
+                    cursor: bulkProcessing ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <option value="" disabled>Change Status...</option>
+                  <option value="new">Status: New</option>
+                  <option value="contacted">Status: Contacted</option>
+                  <option value="qualified">Status: Qualified</option>
+                  <option value="converted">Status: Converted</option>
+                  <option value="lost">Status: Lost</option>
+                </select>
+
+                {/* Change Priority Dropdown */}
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (e.target.value) handleBulkPriorityChange(e.target.value as LeadPriority);
+                  }}
+                  disabled={bulkProcessing}
+                  aria-label="Change priority of selected leads"
+                  style={{
+                    padding: '0.4rem 0.65rem',
+                    borderRadius: '6px',
+                    border: '1px solid #475569',
+                    backgroundColor: '#334155',
+                    color: '#ffffff',
+                    fontSize: '0.825rem',
+                    cursor: bulkProcessing ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <option value="" disabled>Change Priority...</option>
+                  <option value="low">Priority: Low</option>
+                  <option value="medium">Priority: Medium</option>
+                  <option value="high">Priority: High</option>
+                </select>
+
+                {/* Export Selected CSV */}
+                <button
+                  type="button"
+                  onClick={handleExportSelectedCsv}
+                  disabled={bulkProcessing || exportingCsv}
+                  aria-label="Export selected leads to CSV"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.4rem 0.75rem',
+                    borderRadius: '6px',
+                    border: '1px solid #475569',
+                    backgroundColor: '#334155',
+                    color: '#ffffff',
+                    fontSize: '0.825rem',
+                    fontWeight: 500,
+                    cursor: bulkProcessing || exportingCsv ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <span>📥</span>
+                  <span>Export CSV ({selectedLeadIds.length})</span>
+                </button>
+
+                {/* Bulk Archive Button */}
+                <button
+                  type="button"
+                  onClick={() => setBulkArchiveModalOpen(true)}
+                  disabled={bulkProcessing}
+                  aria-label="Archive selected leads"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.4rem 0.75rem',
+                    borderRadius: '6px',
+                    border: '1px solid #dc2626',
+                    backgroundColor: '#ef4444',
+                    color: '#ffffff',
+                    fontSize: '0.825rem',
+                    fontWeight: 600,
+                    cursor: bulkProcessing ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <span>🗑️</span>
+                  <span>Archive ({selectedLeadIds.length})</span>
+                </button>
+
+                {/* Clear Selection Button */}
+                <button
+                  type="button"
+                  onClick={() => setSelectedLeadIds([])}
+                  disabled={bulkProcessing}
+                  aria-label="Clear selection"
+                  style={{
+                    padding: '0.4rem 0.65rem',
+                    borderRadius: '6px',
+                    border: '1px solid #64748b',
+                    backgroundColor: 'transparent',
+                    color: '#cbd5e1',
+                    fontSize: '0.825rem',
+                    cursor: bulkProcessing ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  Clear Selection
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Leads Table Container */}
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '10px',
+              border: '1px solid #e5e7eb',
+              overflow: 'hidden',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.03)'
+            }}
+          >
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.875rem' }}>
+                <thead>
+                  <tr style={{ backgroundColor: '#f9fafb', borderBottom: '1px solid #e5e7eb', color: '#4b5563' }}>
+                    <th style={{ padding: '0.75rem 1rem', width: '40px' }}>
+                      <input
+                        type="checkbox"
+                        ref={selectAllCheckboxRef}
+                        checked={isAllVisibleSelected}
+                        onChange={handleToggleSelectAll}
+                        aria-label="Select all visible leads"
+                        style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                      />
+                    </th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Lead Name</th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Company</th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Contact Info</th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Source</th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Status</th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Priority</th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600 }}>Added</th>
+                    <th style={{ padding: '0.75rem 1rem', fontWeight: 600, textAlign: 'right' }}>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {leads.map((lead) => {
+                    const statusStyle = getStatusBadgeStyle(lead.status);
+                    const priorityStyle = getPriorityBadgeStyle(lead.priority);
+                    const fullName = `${lead.firstName} ${lead.lastName || ''}`.trim();
+                    const createdDate = new Date(lead.createdAt).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric'
+                    });
+
+                    return (
+                      <tr
+                        key={lead._id}
+                        style={{
+                          borderBottom: '1px solid #f3f4f6',
+                          backgroundColor: selectedLeadIds.includes(lead._id) ? '#f0f7ff' : '#ffffff',
+                          transition: 'background-color 0.1s'
+                        }}
+                        onMouseEnter={(e) => {
+                          if (!selectedLeadIds.includes(lead._id)) e.currentTarget.style.backgroundColor = '#fafafa';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = selectedLeadIds.includes(lead._id) ? '#f0f7ff' : '#ffffff';
+                        }}
+                      >
+                        {/* Selection Checkbox */}
+                        <td style={{ padding: '0.85rem 1rem', width: '40px' }}>
+                          <input
+                            type="checkbox"
+                            checked={selectedLeadIds.includes(lead._id)}
+                            onChange={() => handleToggleSelectRow(lead._id)}
+                            aria-label={`Select lead ${fullName}`}
+                            style={{ cursor: 'pointer', width: '16px', height: '16px' }}
+                          />
+                        </td>
+                        {/* Name Column */}
+                        <td style={{ padding: '0.85rem 1rem' }}>
+
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
                           <div
                             style={{
@@ -980,7 +1353,10 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
             </div>
           </div>
         </div>
-      )}
+      </>
+    )}
+
+
 
       {/* LEAD DETAIL & EDIT MODAL */}
       {isModalOpen && selectedLead && (
@@ -1628,6 +2004,112 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
           </div>
         </div>
       )}
+
+      {/* BULK ARCHIVE CONFIRMATION MODAL */}
+
+      {bulkArchiveModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="bulk-archive-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(17, 24, 39, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 60,
+            padding: '1.5rem',
+            backdropFilter: 'blur(2px)'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !bulkProcessing) setBulkArchiveModalOpen(false);
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              maxWidth: '460px',
+              width: '100%',
+              padding: '1.75rem',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  backgroundColor: '#fee2e2',
+                  color: '#dc2626',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.25rem',
+                  flexShrink: 0
+                }}
+              >
+                ⚠️
+              </div>
+              <div>
+                <h3 id="bulk-archive-modal-title" style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#111827' }}>
+                  Archive {selectedLeadIds.length} {selectedLeadIds.length === 1 ? 'Lead' : 'Leads'}?
+                </h3>
+                <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.825rem', color: '#6b7280' }}>
+                  Action applies to all selected leads
+                </p>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.875rem', color: '#4b5563', lineHeight: 1.5, marginBottom: '1.5rem' }}>
+              Are you sure you want to archive <strong>{selectedLeadIds.length}</strong> selected lead{selectedLeadIds.length === 1 ? '' : 's'}? They will be removed from your active Leads CRM view and can no longer be updated via active bulk operations.
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button
+                type="button"
+                disabled={bulkProcessing}
+                onClick={() => setBulkArchiveModalOpen(false)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  backgroundColor: '#ffffff',
+                  color: '#374151',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: bulkProcessing ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={bulkProcessing}
+                onClick={handleBulkArchiveConfirm}
+                style={{
+                  padding: '0.5rem 1.1rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: '#dc2626',
+                  color: '#ffffff',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: bulkProcessing ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {bulkProcessing
+                  ? 'Archiving...'
+                  : `Yes, Archive ${selectedLeadIds.length} ${selectedLeadIds.length === 1 ? 'Lead' : 'Leads'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+
 };
