@@ -15,11 +15,14 @@ export interface ProspectLocation {
 
 export interface DiscoveredProspect {
   id: string;
+  externalId?: string;
   name: string;
   entityType: EntityType;
   category: string;
   description?: string;
   location: ProspectLocation;
+  latitude?: number;
+  longitude?: number;
   phone?: string;
   email?: string;
   website?: string;
@@ -28,6 +31,9 @@ export interface DiscoveredProspect {
   sourceUrl?: string;
   confidenceScore?: number;
   discoveryMetadata: Record<string, any>;
+  provenance?: Record<string, { value: any; source: string; extractedAt?: string }>;
+  isEnriched?: boolean;
+  enrichmentMetadata?: Record<string, any>;
 }
 
 export interface DiscoverySearchResult {
@@ -36,7 +42,28 @@ export interface DiscoverySearchResult {
   prospects: DiscoveredProspect[];
   provider: string;
   simulated: boolean;
+  nextCursor?: string;
+  attribution?: string;
   metadata?: Record<string, any>;
+}
+
+export interface ProspectEnrichmentResult {
+  businessName?: string;
+  emails: string[];
+  phones: string[];
+  website?: string;
+  contactPages: string[];
+  socialProfiles: SocialProfile[];
+  address?: string;
+  overview?: string;
+  provenance: Record<string, string>;
+  metadata: {
+    provider: string;
+    targetUrl: string;
+    pagesScanned: string[];
+    durationMs: number;
+    cached?: boolean;
+  };
 }
 
 /**
@@ -44,13 +71,14 @@ export interface DiscoverySearchResult {
  */
 export async function searchProspects(
   query: string,
-  limit = 8
+  limit = 8,
+  cursor?: string
 ): Promise<DiscoverySearchResult> {
   const res = await fetch('/api/discovery/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ query, limit })
+    body: JSON.stringify({ query, limit, cursor })
   });
 
   const data = await res.json();
@@ -59,6 +87,34 @@ export async function searchProspects(
   }
 
   return data.data;
+}
+
+/**
+ * Enriches a discovered prospect using its official public website.
+ */
+export async function enrichProspect(
+  prospect: DiscoveredProspect,
+  forceRefresh = false
+): Promise<{ prospect: DiscoveredProspect; enrichment: ProspectEnrichmentResult }> {
+  const res = await fetch('/api/discovery/enrich', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({
+      prospect,
+      options: { forceRefresh }
+    })
+  });
+
+  const data = await res.json();
+  if (!res.ok) {
+    throw new Error(data.error || 'Failed to enrich prospect from website');
+  }
+
+  return {
+    prospect: data.data,
+    enrichment: data.enrichment
+  };
 }
 
 /**

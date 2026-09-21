@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import {
   searchProspects,
+  enrichProspect,
   convertProspectToLead,
   DiscoveredProspect,
-  DiscoverySearchResult
+  DiscoverySearchResult,
+  SocialProfile
 } from '../api/discovery.api';
 
 const EXAMPLE_QUERIES = [
@@ -15,16 +17,21 @@ const EXAMPLE_QUERIES = [
 ];
 
 type ConversionStatus = 'idle' | 'converting' | 'saved' | 'error';
+type EnrichStatus = 'idle' | 'loading' | 'enriched' | 'error';
 
 export const LeadDiscovery: React.FC = () => {
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searchResult, setSearchResult] = useState<DiscoverySearchResult | null>(null);
 
   // Track CRM conversion state per prospect ID: 'idle' | 'converting' | 'saved' | 'error'
   const [conversionState, setConversionState] = useState<Record<string, ConversionStatus>>({});
   const [conversionMsg, setConversionMsg] = useState<string | null>(null);
+
+  // Track website enrichment state per prospect ID: 'idle' | 'loading' | 'enriched' | 'error'
+  const [enrichingState, setEnrichingState] = useState<Record<string, EnrichStatus>>({});
 
   const handleSearch = async (e?: React.FormEvent, searchQuery?: string) => {
     if (e) e.preventDefault();
@@ -49,6 +56,24 @@ export const LeadDiscovery: React.FC = () => {
     }
   };
 
+  const handleLoadMore = async () => {
+    if (!searchResult?.nextCursor || loadingMore) return;
+    try {
+      setLoadingMore(true);
+      setError(null);
+      const moreResult = await searchProspects(query, 8, searchResult.nextCursor);
+      setSearchResult({
+        ...moreResult,
+        prospects: [...searchResult.prospects, ...moreResult.prospects],
+        total: searchResult.prospects.length + moreResult.prospects.length
+      });
+    } catch (err: any) {
+      setError(err.message || 'Failed to load more prospects.');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const handleExampleClick = (example: string) => {
     setQuery(example);
     handleSearch(undefined, example);
@@ -65,6 +90,30 @@ export const LeadDiscovery: React.FC = () => {
     } catch (err: any) {
       setConversionState((prev) => ({ ...prev, [prospect.id]: 'error' }));
       setError(err.message || `Failed to convert "${prospect.name}" to a lead.`);
+    }
+  };
+
+  const handleEnrich = async (prospect: DiscoveredProspect) => {
+    try {
+      setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'loading' }));
+      setError(null);
+
+      const { prospect: enrichedProspect } = await enrichProspect(prospect);
+
+      if (searchResult) {
+        setSearchResult({
+          ...searchResult,
+          prospects: searchResult.prospects.map((p) =>
+            p.id === prospect.id ? enrichedProspect : p
+          )
+        });
+      }
+
+      setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'enriched' }));
+      setConversionMsg(`Enriched "${prospect.name}" with public contact data from its website!`);
+    } catch (err: any) {
+      setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'error' }));
+      setError(err.message || `Website enrichment failed for "${prospect.name}".`);
     }
   };
 
@@ -259,20 +308,28 @@ export const LeadDiscovery: React.FC = () => {
                 {searchResult.metadata?.extractedCategory && ` • Category: ${searchResult.metadata.extractedCategory}`}
                 {searchResult.metadata?.extractedLocation && ` • Location: ${searchResult.metadata.extractedLocation}`}
               </p>
+              {searchResult.attribution && (
+                <p style={{ fontSize: '0.75rem', color: '#4b5563', margin: '0.35rem 0 0 0' }}>
+                  ℹ️ {searchResult.attribution}
+                </p>
+              )}
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <span
                 style={{
                   fontSize: '0.75rem',
-                  backgroundColor: '#fef3c7',
-                  color: '#92400e',
-                  padding: '0.2rem 0.5rem',
-                  borderRadius: '4px',
+                  backgroundColor: searchResult.simulated ? '#fef3c7' : '#dcfce7',
+                  color: searchResult.simulated ? '#92400e' : '#166534',
+                  border: searchResult.simulated ? '1px solid #fde68a' : '1px solid #bbf7d0',
+                  padding: '0.25rem 0.65rem',
+                  borderRadius: '6px',
                   fontWeight: 600
                 }}
               >
-                Provider: {searchResult.provider} {searchResult.simulated && '(Sandbox)'}
+                {searchResult.simulated
+                  ? `Provider: ${searchResult.provider} (Sandbox)`
+                  : `Real Provider: ${searchResult.provider.toUpperCase()}`}
               </span>
             </div>
           </div>
@@ -294,155 +351,308 @@ export const LeadDiscovery: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem' }}>
-              {searchResult.prospects.map((prospect) => {
-                const status = conversionState[prospect.id] || 'idle';
+            <div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem' }}>
+                {searchResult.prospects.map((prospect: DiscoveredProspect) => {
+                  const status = conversionState[prospect.id] || 'idle';
+                  const enrichStatus = enrichingState[prospect.id] || 'idle';
 
-                return (
-                  <div
-                    key={prospect.id}
-                    style={{
-                      backgroundColor: '#ffffff',
-                      borderRadius: '10px',
-                      border: '1px solid #e5e7eb',
-                      padding: '1.25rem',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      boxShadow: '0 1px 2px rgba(0,0,0,0.04)',
-                      transition: 'border-color 0.15s ease'
-                    }}
-                  >
-                    <div>
-                      {/* Top Badges */}
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                          <span
-                            style={{
-                              fontSize: '0.7rem',
-                              fontWeight: 700,
-                              textTransform: 'uppercase',
-                              backgroundColor: prospect.entityType === 'person' ? '#eff6ff' : '#f0fdf4',
-                              color: prospect.entityType === 'person' ? '#1d4ed8' : '#15803d',
-                              padding: '0.15rem 0.45rem',
-                              borderRadius: '4px'
-                            }}
-                          >
-                            {prospect.entityType}
-                          </span>
-                          {prospect.source === 'development_sandbox' && (
+                  return (
+                    <div
+                      key={prospect.id}
+                      style={{
+                        backgroundColor: '#ffffff',
+                        border: '1px solid #e5e7eb',
+                        borderRadius: '10px',
+                        padding: '1.25rem',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        justifyContent: 'space-between',
+                        boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                        transition: 'transform 0.15s ease, box-shadow 0.15s ease'
+                      }}
+                    >
+                      <div>
+                        {/* Top Category & Type Badge */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.65rem' }}>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', alignItems: 'center' }}>
                             <span
                               style={{
-                                fontSize: '0.68rem',
+                                fontSize: '0.7rem',
                                 fontWeight: 700,
                                 textTransform: 'uppercase',
-                                backgroundColor: '#fef3c7',
-                                color: '#92400e',
-                                border: '1px solid #fde68a',
+                                backgroundColor: prospect.entityType === 'person' ? '#eff6ff' : '#f0fdf4',
+                                color: prospect.entityType === 'person' ? '#1d4ed8' : '#15803d',
                                 padding: '0.15rem 0.45rem',
-                                borderRadius: '4px',
-                                letterSpacing: '0.025em'
+                                borderRadius: '4px'
                               }}
                             >
-                              Sandbox Data
+                              {prospect.entityType}
                             </span>
-                          )}
+                            {prospect.source === 'development_sandbox' ? (
+                              <span
+                                style={{
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  textTransform: 'uppercase',
+                                  backgroundColor: '#fef3c7',
+                                  color: '#92400e',
+                                  border: '1px solid #fde68a',
+                                  padding: '0.15rem 0.45rem',
+                                  borderRadius: '4px',
+                                  letterSpacing: '0.025em'
+                                }}
+                              >
+                                Sandbox Data
+                              </span>
+                            ) : (
+                              <span
+                                style={{
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  textTransform: 'uppercase',
+                                  backgroundColor: '#ecfdf5',
+                                  color: '#065f46',
+                                  border: '1px solid #a7f3d0',
+                                  padding: '0.15rem 0.45rem',
+                                  borderRadius: '4px',
+                                  letterSpacing: '0.025em'
+                                }}
+                              >
+                                Real Listing
+                              </span>
+                            )}
+                            {prospect.isEnriched && (
+                              <span
+                                style={{
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  textTransform: 'uppercase',
+                                  backgroundColor: '#f3e8ff',
+                                  color: '#6b21a8',
+                                  border: '1px solid #d8b4fe',
+                                  padding: '0.15rem 0.45rem',
+                                  borderRadius: '4px',
+                                  letterSpacing: '0.025em'
+                                }}
+                              >
+                                ✨ Enriched
+                              </span>
+                            )}
+                          </div>
+                          <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                            {prospect.category}
+                          </span>
                         </div>
-                        <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
-                          {prospect.category}
-                        </span>
-                      </div>
 
-                      {/* Prospect Name */}
-                      <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: '0 0 0.5rem 0', color: '#111827' }}>
-                        {prospect.name}
-                      </h3>
+                        {/* Prospect Name */}
+                        <h3 style={{ fontSize: '1.1rem', fontWeight: 700, margin: '0 0 0.5rem 0', color: '#111827' }}>
+                          {prospect.name}
+                        </h3>
 
-                      {/* Description */}
-                      {prospect.description && (
-                        <p style={{ fontSize: '0.85rem', color: '#4b5563', margin: '0 0 0.75rem 0', lineHeight: 1.4 }}>
-                          {prospect.description}
-                        </p>
-                      )}
+                        {/* Description */}
+                        {prospect.description && (
+                          <p style={{ fontSize: '0.85rem', color: '#4b5563', margin: '0 0 0.75rem 0', lineHeight: 1.4 }}>
+                            {prospect.description}
+                          </p>
+                        )}
 
-                      {/* Location */}
-                      {(prospect.location?.city || prospect.location?.address) && (
+                        {/* Location */}
                         <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                           <span>📍</span>
                           <span>
-                            {[prospect.location.address, prospect.location.city, prospect.location.country]
+                            {[prospect.location?.address, prospect.location?.city, prospect.location?.state, prospect.location?.country]
                               .filter(Boolean)
-                              .join(', ')}
+                              .join(', ') || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Location details not listed</span>}
                           </span>
                         </div>
-                      )}
 
-                      {/* Contact Points */}
-                      <div style={{ fontSize: '0.8rem', color: '#4b5563', borderTop: '1px solid #f3f4f6', paddingTop: '0.5rem', marginTop: '0.5rem' }}>
-                        {prospect.phone && (
+                        {/* Contact Points */}
+                        <div style={{ fontSize: '0.8rem', color: '#4b5563', borderTop: '1px solid #f3f4f6', paddingTop: '0.5rem', marginTop: '0.5rem' }}>
                           <div style={{ marginBottom: '0.25rem' }}>
-                            <strong>Phone:</strong> {prospect.phone}
+                            <strong>Phone:</strong>{' '}
+                            {prospect.phone ? (
+                              <span>
+                                {prospect.phone}
+                                {prospect.provenance?.phone?.source === 'website' && (
+                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#f3e8ff', color: '#6b21a8', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                    via Website
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Not available</span>
+                            )}
                           </div>
-                        )}
-                        {prospect.email && (
                           <div style={{ marginBottom: '0.25rem' }}>
-                            <strong>Email:</strong> {prospect.email}
+                            <strong>Email:</strong>{' '}
+                            {prospect.email ? (
+                              <span>
+                                {prospect.email}
+                                {prospect.provenance?.email?.source === 'website' && (
+                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#f3e8ff', color: '#6b21a8', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                    via Website
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Not available</span>
+                            )}
                           </div>
-                        )}
-                        {prospect.website && (
                           <div style={{ marginBottom: '0.25rem' }}>
                             <strong>Web:</strong>{' '}
-                            <a
-                              href={prospect.website}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ color: '#2563eb', textDecoration: 'none' }}
-                            >
-                              {prospect.website.replace(/^https?:\/\//, '')}
-                            </a>
+                            {prospect.website ? (
+                              <a
+                                href={prospect.website}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: '#2563eb', textDecoration: 'none' }}
+                              >
+                                {prospect.website.replace(/^https?:\/\//, '')}
+                              </a>
+                            ) : (
+                              <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Not available</span>
+                            )}
                           </div>
-                        )}
+
+                          {/* Social Profiles extracted via website */}
+                          {prospect.socialProfiles && prospect.socialProfiles.length > 0 && (
+                            <div style={{ marginTop: '0.35rem', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
+                              <strong style={{ fontSize: '0.75rem', color: '#4b5563' }}>Social:</strong>
+                              {prospect.socialProfiles.map((sp: SocialProfile, idx: number) => (
+                                <a
+                                  key={idx}
+                                  href={sp.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    color: '#4338ca',
+                                    backgroundColor: '#eef2ff',
+                                    padding: '0.1rem 0.4rem',
+                                    borderRadius: '4px',
+                                    textDecoration: 'none',
+                                    fontWeight: 500
+                                  }}
+                                >
+                                  {sp.platform} ↗
+                                </a>
+                              ))}
+                            </div>
+                          )}
+
+                          {prospect.sourceUrl && (
+                            <div style={{ marginTop: '0.25rem', fontSize: '0.75rem' }}>
+                              <a
+                                href={prospect.sourceUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: '#4b5563', textDecoration: 'underline' }}
+                              >
+                                View on {prospect.source === 'openstreetmap' ? 'OpenStreetMap ↗' : 'Directory ↗'}
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Card Actions */}
+                      <div style={{ marginTop: '1.25rem', paddingTop: '0.75rem', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                        <div style={{ fontSize: '0.7rem', color: '#9ca3af', display: 'flex', flexDirection: 'column', gap: '0.15rem' }}>
+                          <span>
+                            Source: {prospect.source === 'development_sandbox' ? 'Development Sandbox (Simulated)' : prospect.source}
+                          </span>
+                          {prospect.externalId && (
+                            <span style={{ fontSize: '0.65rem' }}>ID: {prospect.externalId}</span>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                          {/* Website Enrichment Button */}
+                          {prospect.website && (
+                            <button
+                              type="button"
+                              onClick={() => handleEnrich(prospect)}
+                              disabled={enrichStatus === 'loading' || prospect.isEnriched}
+                              style={{
+                                padding: '0.4rem 0.75rem',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 600,
+                                border: prospect.isEnriched ? '1px solid #d8b4fe' : '1px solid #c084fc',
+                                backgroundColor: prospect.isEnriched ? '#faf5ff' : '#ffffff',
+                                color: prospect.isEnriched ? '#6b21a8' : '#7e22ce',
+                                cursor: enrichStatus === 'loading' || prospect.isEnriched ? 'default' : 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}
+                            >
+                              {enrichStatus === 'loading' && 'Enriching...'}
+                              {prospect.isEnriched && '✨ Enriched'}
+                              {!prospect.isEnriched && enrichStatus !== 'loading' && '✨ Enrich'}
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleConvertToLead(prospect)}
+                            disabled={status === 'converting' || status === 'saved'}
+                            style={{
+                              padding: '0.4rem 0.85rem',
+                              borderRadius: '6px',
+                              fontSize: '0.8rem',
+                              fontWeight: 600,
+                              border: status === 'saved' ? '1px solid #86efac' : 'none',
+                              backgroundColor:
+                                status === 'saved'
+                                  ? '#f0fdf4'
+                                  : status === 'converting'
+                                  ? '#9ca3af'
+                                  : '#059669',
+                              color: status === 'saved' ? '#15803d' : '#ffffff',
+                              cursor: status === 'saved' || status === 'converting' ? 'default' : 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.35rem'
+                            }}
+                          >
+                            {status === 'converting' && 'Saving...'}
+                            {status === 'saved' && '✓ Saved in CRM'}
+                            {status === 'idle' && '+ Save as Lead'}
+                            {status === 'error' && 'Retry Save'}
+                          </button>
+                        </div>
                       </div>
                     </div>
+                  );
+                })}
+              </div>
 
-                    {/* Card Actions */}
-                    <div style={{ marginTop: '1.25rem', paddingTop: '0.75rem', borderTop: '1px solid #e5e7eb', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>
-                        Source: {prospect.source === 'development_sandbox' ? 'Development Sandbox (Simulated)' : prospect.source}
-                      </span>
-
-                      <button
-                        type="button"
-                        onClick={() => handleConvertToLead(prospect)}
-                        disabled={status === 'converting' || status === 'saved'}
-                        style={{
-                          padding: '0.4rem 0.85rem',
-                          borderRadius: '6px',
-                          fontSize: '0.8rem',
-                          fontWeight: 600,
-                          border: status === 'saved' ? '1px solid #86efac' : 'none',
-                          backgroundColor:
-                            status === 'saved'
-                              ? '#f0fdf4'
-                              : status === 'converting'
-                              ? '#9ca3af'
-                              : '#059669',
-                          color: status === 'saved' ? '#15803d' : '#ffffff',
-                          cursor: status === 'saved' || status === 'converting' ? 'default' : 'pointer',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: '0.35rem'
-                        }}
-                      >
-                        {status === 'converting' && 'Saving...'}
-                        {status === 'saved' && '✓ Saved in CRM'}
-                        {status === 'idle' && '+ Save as Lead'}
-                        {status === 'error' && 'Retry Save'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+              {/* Pagination Load More Button */}
+              {searchResult.nextCursor && (
+                <div style={{ textAlign: 'center', marginTop: '2rem' }}>
+                  <button
+                    type="button"
+                    onClick={handleLoadMore}
+                    disabled={loadingMore}
+                    style={{
+                      padding: '0.65rem 1.75rem',
+                      backgroundColor: '#ffffff',
+                      border: '1px solid #d1d5db',
+                      borderRadius: '8px',
+                      color: '#1f2937',
+                      fontSize: '0.9rem',
+                      fontWeight: 600,
+                      cursor: loadingMore ? 'not-allowed' : 'pointer',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
+                      transition: 'all 0.15s ease'
+                    }}
+                  >
+                    {loadingMore ? 'Loading more prospects...' : 'Load More Prospects ↓'}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

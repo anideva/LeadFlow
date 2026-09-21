@@ -5,12 +5,13 @@ import { AppError } from '../utils/error.util';
 export const searchProspects = async (req: Request, res: Response): Promise<void> => {
   try {
     const user = req.user!;
-    const { query, limit, locationHint } = req.body;
+    const { query, limit, locationHint, cursor } = req.body;
 
     const result = await DiscoveryService.search(user.workspaceId, user.id, {
       query,
       limit: limit ? Number(limit) : undefined,
-      locationHint
+      locationHint,
+      cursor
     });
 
     res.status(200).json({
@@ -50,3 +51,31 @@ export const convertProspect = async (req: Request, res: Response): Promise<void
     res.status(500).json({ success: false, error: 'Failed to convert prospect to lead.' });
   }
 };
+
+export const enrichProspect = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const { prospect, options } = req.body;
+
+    const result = await DiscoveryService.enrich(user.workspaceId, user.id, {
+      prospect,
+      options
+    });
+
+    res.status(200).json({
+      success: true,
+      message: 'Prospect enriched successfully from website.',
+      data: result.prospect,
+      enrichment: result.enrichment
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ success: false, error: error.message });
+      return;
+    }
+
+    console.error('[Discovery Controller - Enrich] Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to enrich prospect from website.' });
+  }
+};
+

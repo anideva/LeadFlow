@@ -324,11 +324,77 @@ All endpoints require authentication (`requireAuth`) and are workspace-isolated:
 
 - **Search Prospects:**
   - `POST /api/discovery/search`
-  - Body: `{ "query": "Flower shops in Jaipur", "limit": 10 }`
-  - Response: `{ "query": "...", "total": 10, "provider": "development-discovery", "prospects": [...] }`
+  - Body: `{ "query": "Flower shops in Jaipur", "limit": 10, "cursor": "offset:10" }`
+  - Response: `{ "query": "...", "total": 10, "provider": "openstreetmap", "prospects": [...], "nextCursor": "offset:20" }`
+
+- **Enrich Prospect via Public Website (Phase 9B.2):**
+  - `POST /api/discovery/enrich`
+  - Body: `{ "prospect": { ...DiscoveredProspect } }`
+  - Response: `{ "data": { ...EnrichedProspect }, "enrichment": { ...ProspectEnrichmentResult } }`
 
 - **Convert Prospect to CRM Lead:**
   - `POST /api/discovery/convert`
   - Body: `{ "prospect": { ...DiscoveredProspect } }`
   - Response: `{ "message": "Prospect successfully converted to lead", "lead": { ...Lead } }`
-  - Returns `409 Conflict` if a lead with the same email already exists in the workspace.
+  - Returns `409 Conflict` if a lead with the same external ID or email already exists in the workspace.
+
+---
+
+## Real Lead Discovery (Phase 9B.1 — OpenStreetMap)
+
+Phase 9B.1 brings real-world data discovery to LeadFlow with ₹0 cost and zero required API credentials using OpenStreetMap Nominatim under the Open Database License (ODbL 1.0).
+
+- **Provider**: `OpenStreetMapDiscoveryProvider` (configured via `DISCOVERY_PROVIDER=openstreetmap`).
+- **Data Integrity**: Real listings only; missing phones, emails, and websites are strictly returned as `undefined` (never fabricated or synthesized).
+- **Polite Rate Limiting**: Built-in 1-second delay between upstream queries adhering to Nominatim's Acceptable Use Policy.
+- **Provider-Neutral Pagination**: Supports offset-based pagination via opaque `cursor` and `nextCursor`.
+- **Deduplication**: Enforces duplicate prevention across both external provider ID (`osm_node_<id>`) and unique business email within each workspace.
+
+---
+
+## Free Website-Based Prospect Enrichment (Phase 9B.2)
+
+Phase 9B.2 enables LeadFlow to inspect a discovered prospect's official website and extract public business contact details safely without paid third-party APIs.
+
+### Architecture
+```text
+Discovered Prospect with Website
+               │
+               ▼
+   [POST /api/discovery/enrich]
+               │
+               ▼
+     [DiscoveryService.enrich]
+               │
+               ▼
+    [IEnrichmentProvider]
+               │
+               ▼
+  [WebsiteEnrichmentProvider]
+   - DNS Resolution & SSRF Safety
+   - Bounded Fetch (2MB max, 7s timeout, max 3 redirects)
+   - HTML Parser (No JS execution)
+   - Public Email Extraction (mailto: & body text)
+   - Public Phone Extraction (tel: & text patterns)
+   - Social Media Profile Links (LinkedIn, Facebook, Instagram, Twitter/X, GitHub)
+   - In-Memory Session Cache (15m TTL)
+               │
+               ▼
+   Enriched Prospect with Field Provenance
+               │
+               ▼
+      [Save to CRM as Lead]
+```
+
+### Extracted Information
+- **Public Business Emails**: Extracted from `mailto:` links and body text; excludes image filenames (`.png`, `.jpg`) and placeholder domains.
+- **Public Phone Numbers**: Extracted from `tel:` links and standard phone text patterns; excludes timestamps, dates, and dimension values.
+- **Official Social Profiles**: Links explicitly published by the business pointing to Facebook, Instagram, LinkedIn, X/Twitter, YouTube, and GitHub.
+- **Discovered Contact Pages**: Identifies internal links to `/contact`, `/about`, etc., scanning up to 1 contact page if the homepage lacked email info.
+- **Metadata & Overview**: Captures `<title>` and `<meta name="description">` tags.
+
+### Data Provenance & Safety
+- **Clear Field Provenance**: Discovery data is never blindly overwritten. Every attribute retains its originating source (`source: "openstreetmap"` vs `source: "website"`), rendered with distinct UI badges.
+- **Strict SSRF Protection**: All outbound URLs are validated against private, reserved, loopback (`127.0.0.1`, `localhost`, `::1`), link-local (`169.254.169.254` cloud metadata), and internal network ranges.
+- **Zero-Cost Operation**: 100% free; requires no API keys, credit cards, or external scraping subscriptions.
+- **Limitations**: Only extracts publicly visible text from static HTML. Does not execute client-side JavaScript (SPAs that require JS rendering without pre-rendered HTML will yield minimal text). Does not scrape social media platforms directly.
