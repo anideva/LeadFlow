@@ -4,6 +4,7 @@ import { AuthPage } from './components/auth/AuthPage';
 import { WorkflowList } from './pages/WorkflowList';
 import { WorkflowEditor } from './pages/WorkflowEditor';
 import { LeadDiscovery } from './pages/LeadDiscovery';
+import { LeadCRM } from './pages/LeadCRM';
 
 interface HealthStatus {
   status: string;
@@ -14,7 +15,7 @@ interface HealthStatus {
 
 function AppContent() {
   const { user, workspace, isLoading, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'discovery' | 'workflows' | 'editor' | 'health'>('discovery');
+  const [activeTab, setActiveTab] = useState<'discovery' | 'crm' | 'workflows' | 'editor' | 'health'>('discovery');
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
 
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -73,7 +74,7 @@ function AppContent() {
               fontWeight: 700
             }}
           >
-            Phase 10
+            Phase 11A
           </span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#6b7280', fontSize: '0.9rem' }}>
@@ -118,7 +119,7 @@ function AppContent() {
                 fontWeight: 600
               }}
             >
-              Phase 10
+              Phase 11A
             </span>
           </div>
 
@@ -140,6 +141,24 @@ function AppContent() {
               }}
             >
               Lead Discovery
+            </button>
+            <button
+              onClick={() => {
+                setSelectedWorkflowId(null);
+                setActiveTab('crm');
+              }}
+              style={{
+                padding: '0.4rem 0.8rem',
+                border: 'none',
+                borderRadius: '6px',
+                backgroundColor: activeTab === 'crm' ? '#eff6ff' : 'transparent',
+                color: activeTab === 'crm' ? '#1d4ed8' : '#4b5563',
+                fontWeight: 600,
+                fontSize: '0.875rem',
+                cursor: 'pointer'
+              }}
+            >
+              Leads CRM
             </button>
             <button
               onClick={handleBackToList}
@@ -218,7 +237,13 @@ function AppContent() {
 
       {/* Main Content Area */}
       <main>
-        {activeTab === 'discovery' && <LeadDiscovery />}
+        {activeTab === 'discovery' && (
+          <LeadDiscovery onNavigateToCRM={() => setActiveTab('crm')} />
+        )}
+
+        {activeTab === 'crm' && (
+          <LeadCRM onNavigateToDiscovery={() => setActiveTab('discovery')} />
+        )}
 
         {activeTab === 'workflows' && (
           <WorkflowList

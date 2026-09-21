@@ -19,7 +19,11 @@ const EXAMPLE_QUERIES = [
 type ConversionStatus = 'idle' | 'converting' | 'saved' | 'error';
 type EnrichStatus = 'idle' | 'loading' | 'enriched' | 'error';
 
-export const LeadDiscovery: React.FC = () => {
+interface LeadDiscoveryProps {
+  onNavigateToCRM?: () => void;
+}
+
+export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM }) => {
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -235,10 +239,33 @@ export const LeadDiscovery: React.FC = () => {
             marginBottom: '1.5rem',
             display: 'flex',
             alignItems: 'center',
-            justifyContent: 'space-between'
+            justifyContent: 'space-between',
+            gap: '1rem',
+            flexWrap: 'wrap'
           }}
         >
-          <span>✓ {conversionMsg}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <span>✓ {conversionMsg}</span>
+            {onNavigateToCRM && conversionMsg.includes('saved to Lead CRM') && (
+              <button
+                type="button"
+                onClick={onNavigateToCRM}
+                style={{
+                  backgroundColor: '#059669',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '0.25rem 0.65rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                }}
+              >
+                View in Leads CRM →
+              </button>
+            )}
+          </div>
           <button
             onClick={() => setConversionMsg(null)}
             style={{ background: 'none', border: 'none', color: '#065f46', cursor: 'pointer', fontWeight: 600 }}
