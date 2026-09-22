@@ -10,6 +10,9 @@ export interface ICampaignLead extends Document {
   leadId: Types.ObjectId;
   status: CampaignLeadStatus;
   addedAt: Date;
+  sentAt?: Date;
+  errorMessage?: string;
+  processedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -46,6 +49,16 @@ const campaignLeadSchema = new Schema<ICampaignLead>(
     addedAt: {
       type: Date,
       default: Date.now
+    },
+    sentAt: {
+      type: Date
+    },
+    errorMessage: {
+      type: String,
+      trim: true
+    },
+    processedAt: {
+      type: Date
     }
   },
   {

@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { CampaignService, CampaignQueryOptions } from '../services/campaign.service';
+import { CampaignService, CampaignQueryOptions, CampaignLeadsQueryOptions } from '../services/campaign.service';
 import { AppError } from '../utils/error.util';
 
 export const createCampaign = async (req: Request, res: Response): Promise<void> => {
@@ -141,3 +141,89 @@ export const associateLeads = async (req: Request, res: Response): Promise<void>
     res.status(500).json({ success: false, error: 'Failed to associate leads with campaign.' });
   }
 };
+
+export const getCampaignLeads = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const options = (req as any).campaignLeadsQuery as CampaignLeadsQueryOptions;
+
+    const result = await CampaignService.listCampaignLeads(user.workspaceId, req.params.id, options);
+
+    res.status(200).json({
+      success: true,
+      data: result.data,
+      pagination: result.pagination
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ success: false, error: error.message });
+      return;
+    }
+
+    console.error('[Campaign Controller - GetCampaignLeads] Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to retrieve campaign leads.' });
+  }
+};
+
+export const removeCampaignLead = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const result = await CampaignService.removeCampaignLead(
+      user.workspaceId,
+      req.params.id,
+      req.params.leadId
+    );
+
+    res.status(200).json(result);
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ success: false, error: error.message });
+      return;
+    }
+
+    console.error('[Campaign Controller - RemoveCampaignLead] Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to remove lead from campaign.' });
+  }
+};
+
+export const getCampaignStats = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const stats = await CampaignService.getCampaignStats(user.workspaceId, req.params.id);
+
+    res.status(200).json({
+      success: true,
+      data: stats
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ success: false, error: error.message });
+      return;
+    }
+
+    console.error('[Campaign Controller - GetCampaignStats] Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to retrieve campaign statistics.' });
+  }
+};
+
+export const sendCampaign = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const user = req.user!;
+    const result = await CampaignService.sendCampaign(user.workspaceId, req.params.id, user.id);
+
+    res.status(202).json({
+      success: true,
+      message: 'Campaign queued for delivery.',
+      data: result
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({ success: false, error: error.message });
+      return;
+    }
+
+    console.error('[Campaign Controller - SendCampaign] Error:', error);
+    res.status(500).json({ success: false, error: 'Failed to dispatch campaign.' });
+  }
+};
+

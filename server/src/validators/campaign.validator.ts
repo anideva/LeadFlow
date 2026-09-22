@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { Types } from 'mongoose';
 import { CAMPAIGN_STATUS_VALUES, CampaignStatus } from '../models/Campaign.model';
+import { CAMPAIGN_LEAD_STATUS_VALUES, CampaignLeadStatus } from '../models/CampaignLead.model';
 
 const PROTECTED_FIELDS = ['_id', 'workspaceId', 'createdBy', 'isArchived', 'createdAt', 'updatedAt'];
 const ALLOWED_SORT_FIELDS = ['createdAt', 'updatedAt', 'name', 'status'];
@@ -293,3 +294,78 @@ export const validateCampaignQuery = (req: Request, res: Response, next: NextFun
 
   next();
 };
+
+/**
+ * Validates query parameters for GET /api/campaigns/:id/leads.
+ */
+export const validateCampaignLeadsQuery = (req: Request, res: Response, next: NextFunction): void => {
+  const { page, limit, status } = req.query;
+
+  let parsedPage = 1;
+  if (page !== undefined) {
+    parsedPage = parseInt(page as string, 10);
+    if (isNaN(parsedPage) || parsedPage < 1) {
+      res.status(400).json({
+        success: false,
+        error: 'Query parameter "page" must be a positive integer.'
+      });
+      return;
+    }
+  }
+
+  let parsedLimit = 20;
+  if (limit !== undefined) {
+    parsedLimit = parseInt(limit as string, 10);
+    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      res.status(400).json({
+        success: false,
+        error: 'Query parameter "limit" must be between 1 and 100.'
+      });
+      return;
+    }
+  }
+
+  if (status !== undefined && status !== '') {
+    if (!CAMPAIGN_LEAD_STATUS_VALUES.includes(status as CampaignLeadStatus)) {
+      res.status(400).json({
+        success: false,
+        error: `Status filter must be one of: ${CAMPAIGN_LEAD_STATUS_VALUES.join(', ')}.`
+      });
+      return;
+    }
+  }
+
+  (req as any).campaignLeadsQuery = {
+    page: parsedPage,
+    limit: parsedLimit,
+    status: status ? (status as CampaignLeadStatus) : undefined
+  };
+
+  next();
+};
+
+/**
+ * Validates both campaign ID and lead ID parameters for DELETE /api/campaigns/:id/leads/:leadId.
+ */
+export const validateCampaignAndLeadIds = (req: Request, res: Response, next: NextFunction): void => {
+  const { id, leadId } = req.params;
+
+  if (!id || !Types.ObjectId.isValid(id)) {
+    res.status(400).json({
+      success: false,
+      error: 'Invalid campaign ID format.'
+    });
+    return;
+  }
+
+  if (!leadId || !Types.ObjectId.isValid(leadId)) {
+    res.status(400).json({
+      success: false,
+      error: 'Invalid lead ID format.'
+    });
+    return;
+  }
+
+  next();
+};
+
