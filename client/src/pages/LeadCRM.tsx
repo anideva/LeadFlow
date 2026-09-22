@@ -72,6 +72,9 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
   const [leadToArchive, setLeadToArchive] = useState<Lead | null>(null);
   const [archiving, setArchiving] = useState<boolean>(false);
 
+  // CSV Export Confirmation Modal State
+  const [exportConfirmModal, setExportConfirmModal] = useState<{ open: boolean; type: 'filtered' | 'selected'; count: number } | null>(null);
+
   // Debounce search input by 350ms
   const searchTimerRef = useRef<any>(null);
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -234,43 +237,53 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
     }
   };
 
-  // Handle Export Current Filtered Results
-  const handleExportCurrentResults = async () => {
-    try {
-      setExportingCsv(true);
-      setError(null);
-
-      const { filename } = await downloadLeadsCsv({
-        search: debouncedSearch,
-        status: statusFilter,
-        priority: priorityFilter
-      });
-
-      setSuccessMsg(`Exported CRM results to "${filename}".`);
-      setTimeout(() => setSuccessMsg(null), 4000);
-    } catch (err: any) {
-      setError(err.message || 'Failed to export CRM results as CSV.');
-    } finally {
-      setExportingCsv(false);
-    }
+  // Handle Export Current Filtered Results - Opens confirmation modal
+  const handleExportCurrentResults = () => {
+    if (pagination.total === 0) return;
+    setExportConfirmModal({
+      open: true,
+      type: 'filtered',
+      count: pagination.total
+    });
   };
 
-  // Handle Export Selected Leads
-  const handleExportSelectedCsv = async () => {
+  // Handle Export Selected Leads - Opens confirmation modal
+  const handleExportSelectedCsv = () => {
     if (selectedLeadIds.length === 0) return;
+    setExportConfirmModal({
+      open: true,
+      type: 'selected',
+      count: selectedLeadIds.length
+    });
+  };
+
+  // Execute export ONLY after user confirms in the modal
+  const handleConfirmExport = async () => {
+    if (!exportConfirmModal) return;
 
     try {
       setExportingCsv(true);
       setError(null);
 
-      const { filename } = await downloadLeadsCsv({
-        leadIds: selectedLeadIds
-      });
+      if (exportConfirmModal.type === 'selected') {
+        const { filename } = await downloadLeadsCsv({
+          leadIds: selectedLeadIds
+        });
+        setSuccessMsg(`Exported ${selectedLeadIds.length} selected lead(s) to "${filename}".`);
+      } else {
+        const { filename } = await downloadLeadsCsv({
+          search: debouncedSearch,
+          status: statusFilter,
+          priority: priorityFilter
+        });
+        setSuccessMsg(`Exported CRM results to "${filename}".`);
+      }
 
-      setSuccessMsg(`Exported ${selectedLeadIds.length} selected lead(s) to "${filename}".`);
       setTimeout(() => setSuccessMsg(null), 4000);
+      setExportConfirmModal(null);
     } catch (err: any) {
-      setError(err.message || 'Failed to export selected leads as CSV.');
+      setError(err.message || 'Failed to export CSV.');
+      setExportConfirmModal(null);
     } finally {
       setExportingCsv(false);
     }
@@ -2104,6 +2117,133 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
                 {bulkProcessing
                   ? 'Archiving...'
                   : `Yes, Archive ${selectedLeadIds.length} ${selectedLeadIds.length === 1 ? 'Lead' : 'Leads'}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CRM CSV EXPORT CONFIRMATION MODAL */}
+      {exportConfirmModal && exportConfirmModal.open && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="crm-export-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(17, 24, 39, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 60,
+            padding: '1.5rem',
+            backdropFilter: 'blur(2px)'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !exportingCsv) setExportConfirmModal(null);
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              maxWidth: '480px',
+              width: '100%',
+              padding: '1.75rem',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  backgroundColor: '#eff6ff',
+                  color: '#1d4ed8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.25rem',
+                  flexShrink: 0
+                }}
+              >
+                📥
+              </div>
+              <div>
+                <h3 id="crm-export-modal-title" style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#111827' }}>
+                  Export Leads as CSV?
+                </h3>
+                <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.825rem', color: '#6b7280' }}>
+                  {exportConfirmModal.type === 'selected'
+                    ? `Exporting ${exportConfirmModal.count} selected lead(s)`
+                    : `Exporting current filtered result set (${exportConfirmModal.count} leads)`}
+                </p>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.875rem', color: '#4b5563', lineHeight: 1.5, marginBottom: '1rem' }}>
+              {exportConfirmModal.type === 'selected' ? (
+                <>
+                  You are about to export <strong>{exportConfirmModal.count}</strong> selected lead{exportConfirmModal.count === 1 ? '' : 's'} from your CRM.
+                </>
+              ) : (
+                <>
+                  You are about to export all <strong>{exportConfirmModal.count}</strong> lead{exportConfirmModal.count === 1 ? '' : 's'} currently matching your active filters and search query.
+                </>
+              )}
+            </p>
+
+            <div
+              style={{
+                backgroundColor: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                padding: '0.75rem 1rem',
+                fontSize: '0.825rem',
+                color: '#334155',
+                marginBottom: '1.5rem',
+                lineHeight: 1.4
+              }}
+            >
+              📄 <strong>File download note:</strong> A CSV file formatted according to RFC 4180 containing lead contact information, companies, statuses, priorities, notes, and creation dates will be downloaded to your computer.
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button
+                type="button"
+                disabled={exportingCsv}
+                onClick={() => setExportConfirmModal(null)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  backgroundColor: '#ffffff',
+                  color: '#374151',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: exportingCsv ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={exportingCsv}
+                onClick={handleConfirmExport}
+                style={{
+                  padding: '0.5rem 1.1rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: '#2563eb',
+                  color: '#ffffff',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: exportingCsv ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {exportingCsv ? 'Exporting...' : `Confirm Export (${exportConfirmModal.count})`}
               </button>
             </div>
           </div>

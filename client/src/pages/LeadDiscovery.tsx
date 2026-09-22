@@ -7,6 +7,7 @@ import {
   DiscoverySearchResult,
   SocialProfile
 } from '../api/discovery.api';
+import { exportProspectsToCsv } from '../utils/csv.util';
 
 const EXAMPLE_QUERIES = [
   'Find flower shops in Jaipur',
@@ -36,6 +37,10 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
 
   // Track website enrichment state per prospect ID: 'idle' | 'loading' | 'enriched' | 'error'
   const [enrichingState, setEnrichingState] = useState<Record<string, EnrichStatus>>({});
+
+  // Export CSV confirmation modal state
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const handleSearch = async (e?: React.FormEvent, searchQuery?: string) => {
     if (e) e.preventDefault();
@@ -343,6 +348,29 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={() => setExportModalOpen(true)}
+                disabled={searchResult.prospects.length === 0}
+                aria-label="Export discovery prospects to CSV"
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem',
+                  padding: '0.35rem 0.75rem',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  backgroundColor: '#ffffff',
+                  color: '#374151',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  cursor: searchResult.prospects.length === 0 ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 1px 2px rgba(0, 0, 0, 0.05)'
+                }}
+              >
+                <span>📥</span>
+                <span>Export Results (CSV)</span>
+              </button>
               <span
                 style={{
                   fontSize: '0.75rem',
@@ -708,6 +736,135 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
             <span>✓ Dynamic categories & locations</span>
             <span>✓ Zero industry lock-in</span>
             <span>✓ One-click CRM lead conversion</span>
+          </div>
+        </div>
+      )}
+
+      {/* DISCOVERY CSV EXPORT CONFIRMATION MODAL */}
+      {exportModalOpen && searchResult && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="discovery-export-modal-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(17, 24, 39, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 60,
+            padding: '1.5rem',
+            backdropFilter: 'blur(2px)'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !exporting) setExportModalOpen(false);
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              maxWidth: '480px',
+              width: '100%',
+              padding: '1.75rem',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+              <div
+                style={{
+                  width: '40px',
+                  height: '40px',
+                  borderRadius: '50%',
+                  backgroundColor: '#eff6ff',
+                  color: '#1d4ed8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: '1.25rem',
+                  flexShrink: 0
+                }}
+              >
+                📥
+              </div>
+              <div>
+                <h3 id="discovery-export-modal-title" style={{ margin: 0, fontSize: '1.15rem', fontWeight: 700, color: '#111827' }}>
+                  Export Discovered Prospects as CSV?
+                </h3>
+                <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.825rem', color: '#6b7280' }}>
+                  Query: &ldquo;{searchResult.query}&rdquo;
+                </p>
+              </div>
+            </div>
+
+            <p style={{ fontSize: '0.875rem', color: '#4b5563', lineHeight: 1.5, marginBottom: '1rem' }}>
+              You are about to export <strong>{searchResult.prospects.length}</strong> prospect{searchResult.prospects.length === 1 ? '' : 's'} currently displayed in your search results.
+            </p>
+
+            <div
+              style={{
+                backgroundColor: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: '8px',
+                padding: '0.75rem 1rem',
+                fontSize: '0.825rem',
+                color: '#334155',
+                marginBottom: '1.5rem',
+                lineHeight: 1.4
+              }}
+            >
+              📄 <strong>File download note:</strong> A CSV file formatted according to RFC 4180 containing candidate business names, categories, contact information, websites, and address data will be downloaded to your computer.
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button
+                type="button"
+                disabled={exporting}
+                onClick={() => setExportModalOpen(false)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  backgroundColor: '#ffffff',
+                  color: '#374151',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: exporting ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={exporting}
+                onClick={() => {
+                  try {
+                    setExporting(true);
+                    const { filename, count } = exportProspectsToCsv(searchResult.prospects, searchResult.query);
+                    setConversionMsg(`Exported ${count} prospect(s) to "${filename}".`);
+                    setTimeout(() => setConversionMsg(null), 4000);
+                  } catch (err: any) {
+                    setError(err.message || 'Failed to export prospects to CSV.');
+                  } finally {
+                    setExporting(false);
+                    setExportModalOpen(false);
+                  }
+                }}
+                style={{
+                  padding: '0.5rem 1.1rem',
+                  borderRadius: '6px',
+                  border: 'none',
+                  backgroundColor: '#2563eb',
+                  color: '#ffffff',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: exporting ? 'not-allowed' : 'pointer'
+                }}
+              >
+                {exporting ? 'Exporting...' : `Confirm Export (${searchResult.prospects.length})`}
+              </button>
+            </div>
           </div>
         </div>
       )}

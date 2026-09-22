@@ -5,6 +5,7 @@ import { WorkflowList } from './pages/WorkflowList';
 import { WorkflowEditor } from './pages/WorkflowEditor';
 import { LeadDiscovery } from './pages/LeadDiscovery';
 import { LeadCRM } from './pages/LeadCRM';
+import { EmailTemplates } from './pages/EmailTemplates';
 
 interface HealthStatus {
   status: string;
@@ -15,7 +16,7 @@ interface HealthStatus {
 
 function AppContent() {
   const { user, workspace, isLoading, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'discovery' | 'crm' | 'workflows' | 'editor' | 'health'>('discovery');
+  const [activeTab, setActiveTab] = useState<'discovery' | 'crm' | 'templates' | 'workflows' | 'editor' | 'health'>('discovery');
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
 
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -161,6 +162,24 @@ function AppContent() {
               Leads CRM
             </button>
             <button
+              onClick={() => {
+                setSelectedWorkflowId(null);
+                setActiveTab('templates');
+              }}
+              style={{
+                padding: '0.4rem 0.8rem',
+                border: 'none',
+                borderRadius: '6px',
+                backgroundColor: activeTab === 'templates' ? '#eff6ff' : 'transparent',
+                color: activeTab === 'templates' ? '#1d4ed8' : '#4b5563',
+                fontWeight: 600,
+                fontSize: '0.875rem',
+                cursor: 'pointer'
+              }}
+            >
+              Email Templates
+            </button>
+            <button
               onClick={handleBackToList}
               style={{
                 padding: '0.4rem 0.8rem',
@@ -243,6 +262,10 @@ function AppContent() {
 
         {activeTab === 'crm' && (
           <LeadCRM onNavigateToDiscovery={() => setActiveTab('discovery')} />
+        )}
+
+        {activeTab === 'templates' && (
+          <EmailTemplates />
         )}
 
         {activeTab === 'workflows' && (
