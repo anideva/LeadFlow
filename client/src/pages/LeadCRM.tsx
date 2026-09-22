@@ -11,9 +11,15 @@ import {
   LeadPagination,
   UpdateLeadPayload
 } from '../api/lead.api';
+import {
+  getCampaigns,
+  associateLeadsToCampaign,
+  CampaignItem
+} from '../api/campaign.api';
 
 interface LeadCRMProps {
   onNavigateToDiscovery?: () => void;
+  onNavigateToCampaigns?: () => void;
 }
 
 const STATUS_OPTIONS: { label: string; value: LeadStatus | '' }[] = [
@@ -32,7 +38,7 @@ const PRIORITY_OPTIONS: { label: string; value: LeadPriority | '' }[] = [
   { label: 'Low', value: 'low' }
 ];
 
-export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
+export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery, onNavigateToCampaigns }) => {
   // Leads & Pagination State
   const [leads, setLeads] = useState<Lead[]>([]);
   const [pagination, setPagination] = useState<LeadPagination>({
@@ -59,6 +65,15 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
   const [bulkArchiveModalOpen, setBulkArchiveModalOpen] = useState<boolean>(false);
   const [exportingCsv, setExportingCsv] = useState<boolean>(false);
   const selectAllCheckboxRef = useRef<HTMLInputElement>(null);
+
+  // Add to Campaign Modal State
+  const [addToCampaignModalOpen, setAddToCampaignModalOpen] = useState<boolean>(false);
+  const [availableCampaigns, setAvailableCampaigns] = useState<CampaignItem[]>([]);
+  const [loadingCampaigns, setLoadingCampaigns] = useState<boolean>(false);
+  const [campaignsError, setCampaignsError] = useState<string | null>(null);
+  const [selectedCampaignForAdd, setSelectedCampaignForAdd] = useState<string>('');
+  const [associatingLeads, setAssociatingLeads] = useState<boolean>(false);
+  const [associateError, setAssociateError] = useState<string | null>(null);
 
   // Selected Lead for Detail / Edit Modal
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -234,6 +249,58 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
       setError(err.message || 'Failed to archive leads in bulk.');
     } finally {
       setBulkProcessing(false);
+    }
+  };
+
+  // Handle Open Add to Campaign modal
+  const handleOpenAddToCampaignModal = async () => {
+    if (selectedLeadIds.length === 0) return;
+    setAssociateError(null);
+    setAddToCampaignModalOpen(true);
+    setLoadingCampaigns(true);
+    setCampaignsError(null);
+    try {
+      const res = await getCampaigns({ page: 1, limit: 100 });
+      setAvailableCampaigns(res.data);
+      if (res.data.length > 0) {
+        setSelectedCampaignForAdd(res.data[0]._id);
+      } else {
+        setSelectedCampaignForAdd('');
+      }
+    } catch (err: any) {
+      setCampaignsError(err.message || 'Failed to load campaigns.');
+    } finally {
+      setLoadingCampaigns(false);
+    }
+  };
+
+  // Handle Confirm Add to Campaign
+  const handleConfirmAddToCampaign = async () => {
+    if (!selectedCampaignForAdd || selectedLeadIds.length === 0) return;
+    if (selectedLeadIds.length > 1000) return;
+
+    try {
+      setAssociatingLeads(true);
+      setAssociateError(null);
+
+      const res = await associateLeadsToCampaign(selectedCampaignForAdd, selectedLeadIds);
+
+      const targetCamp = availableCampaigns.find((c) => c._id === selectedCampaignForAdd);
+      const campName = targetCamp ? `"${targetCamp.name}"` : 'campaign';
+
+      let msg = `Successfully added ${res.added} lead(s) to ${campName}.`;
+      if (res.alreadyAssociated > 0 || res.invalid > 0) {
+        msg += ` (${res.alreadyAssociated} already associated, ${res.invalid} invalid)`;
+      }
+
+      setSuccessMsg(msg);
+      setSelectedLeadIds([]);
+      setAddToCampaignModalOpen(false);
+      setTimeout(() => setSuccessMsg(null), 5000);
+    } catch (err: any) {
+      setAssociateError(err.message || 'Failed to add leads to campaign.');
+    } finally {
+      setAssociatingLeads(false);
     }
   };
 
@@ -458,16 +525,33 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (leadToArchive) {
+        if (addToCampaignModalOpen && !associatingLeads) {
+          setAddToCampaignModalOpen(false);
+        } else if (exportConfirmModal && !exportingCsv) {
+          setExportConfirmModal(null);
+        } else if (bulkArchiveModalOpen && !bulkProcessing) {
+          setBulkArchiveModalOpen(false);
+        } else if (leadToArchive && !archiving) {
           setLeadToArchive(null);
-        } else if (isModalOpen) {
+        } else if (isModalOpen && !savingEdit) {
           handleCloseModal();
         }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isModalOpen, leadToArchive]);
+  }, [
+    addToCampaignModalOpen,
+    associatingLeads,
+    exportConfirmModal,
+    exportingCsv,
+    bulkArchiveModalOpen,
+    bulkProcessing,
+    leadToArchive,
+    archiving,
+    isModalOpen,
+    savingEdit
+  ]);
 
   // Compute stats from current view
   const isFiltered = Boolean(debouncedSearch || statusFilter || priorityFilter);
@@ -943,6 +1027,30 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
                   <option value="medium">Priority: Medium</option>
                   <option value="high">Priority: High</option>
                 </select>
+
+                {/* Add to Campaign Button */}
+                <button
+                  type="button"
+                  onClick={handleOpenAddToCampaignModal}
+                  disabled={bulkProcessing || exportingCsv}
+                  aria-label="Add selected leads to campaign"
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    padding: '0.4rem 0.75rem',
+                    borderRadius: '6px',
+                    border: '1px solid #2563eb',
+                    backgroundColor: '#1d4ed8',
+                    color: '#ffffff',
+                    fontSize: '0.825rem',
+                    fontWeight: 600,
+                    cursor: bulkProcessing || exportingCsv ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  <span>📢</span>
+                  <span>Add to Campaign ({selectedLeadIds.length})</span>
+                </button>
 
                 {/* Export Selected CSV */}
                 <button
@@ -2245,6 +2353,362 @@ export const LeadCRM: React.FC<LeadCRMProps> = ({ onNavigateToDiscovery }) => {
               >
                 {exportingCsv ? 'Exporting...' : `Confirm Export (${exportConfirmModal.count})`}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ADD TO CAMPAIGN MODAL */}
+      {addToCampaignModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="add-to-campaign-modal-title"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.5)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !associatingLeads) {
+              setAddToCampaignModalOpen(false);
+            }
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '12px',
+              maxWidth: '520px',
+              width: '100%',
+              padding: '1.75rem',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              border: '1px solid #e2e8f0'
+            }}
+          >
+            {/* Modal Header */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'flex-start',
+                marginBottom: '1.25rem'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                <div
+                  style={{
+                    width: '40px',
+                    height: '40px',
+                    borderRadius: '50%',
+                    backgroundColor: '#eff6ff',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: '1.25rem',
+                    flexShrink: 0
+                  }}
+                >
+                  📢
+                </div>
+                <div>
+                  <h3
+                    id="add-to-campaign-modal-title"
+                    style={{
+                      margin: 0,
+                      fontSize: '1.15rem',
+                      fontWeight: 700,
+                      color: '#111827'
+                    }}
+                  >
+                    Add Leads to Campaign
+                  </h3>
+                  <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.85rem', color: '#6b7280' }}>
+                    Add {selectedLeadIds.length} selected lead{selectedLeadIds.length === 1 ? '' : 's'} to a campaign
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAddToCampaignModalOpen(false)}
+                disabled={associatingLeads}
+                aria-label="Close modal"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '1.25rem',
+                  color: '#9ca3af',
+                  cursor: associatingLeads ? 'not-allowed' : 'pointer',
+                  padding: '0.25rem'
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Error in modal if any */}
+            {associateError && (
+              <div
+                style={{
+                  backgroundColor: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: '6px',
+                  padding: '0.75rem',
+                  color: '#991b1b',
+                  fontSize: '0.85rem',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem'
+                }}
+              >
+                <span>⚠️</span>
+                <span>Failed to add leads to campaign: {associateError}</span>
+              </div>
+            )}
+
+            {/* Lead Count Guard (> 1000) */}
+            {selectedLeadIds.length > 1000 && (
+              <div
+                style={{
+                  backgroundColor: '#fffbeb',
+                  border: '1px solid #fde68a',
+                  borderRadius: '6px',
+                  padding: '0.75rem',
+                  color: '#92400e',
+                  fontSize: '0.85rem',
+                  marginBottom: '1rem',
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '0.5rem'
+                }}
+              >
+                <span>⚠️</span>
+                <div>
+                  <strong>Maximum lead limit exceeded:</strong> A maximum of 1,000 leads can be associated in a single request. Currently selected: {selectedLeadIds.length}. Please select fewer leads.
+                </div>
+              </div>
+            )}
+
+            {/* Content loading state */}
+            {loadingCampaigns ? (
+              <div style={{ padding: '2rem', textAlign: 'center', color: '#6b7280', fontSize: '0.9rem' }}>
+                Loading available campaigns...
+              </div>
+            ) : campaignsError ? (
+              <div style={{ marginBottom: '1.25rem' }}>
+                <div
+                  style={{
+                    backgroundColor: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    borderRadius: '6px',
+                    padding: '0.75rem',
+                    color: '#991b1b',
+                    fontSize: '0.85rem',
+                    marginBottom: '0.75rem'
+                  }}
+                >
+                  {campaignsError}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleOpenAddToCampaignModal}
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    fontSize: '0.825rem',
+                    borderRadius: '4px',
+                    border: '1px solid #d1d5db',
+                    backgroundColor: '#ffffff',
+                    cursor: 'pointer'
+                  }}
+                >
+                  Retry Loading Campaigns
+                </button>
+              </div>
+            ) : availableCampaigns.length === 0 ? (
+              <div
+                style={{
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  padding: '1.5rem',
+                  textAlign: 'center',
+                  marginBottom: '1.5rem'
+                }}
+              >
+                <p style={{ margin: '0 0 1rem 0', color: '#475569', fontSize: '0.9rem' }}>
+                  No campaigns found. Create a campaign first.
+                </p>
+                {onNavigateToCampaigns && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAddToCampaignModalOpen(false);
+                      onNavigateToCampaigns();
+                    }}
+                    style={{
+                      padding: '0.5rem 1rem',
+                      borderRadius: '6px',
+                      border: 'none',
+                      backgroundColor: '#2563eb',
+                      color: '#ffffff',
+                      fontSize: '0.875rem',
+                      fontWeight: 600,
+                      cursor: 'pointer'
+                    }}
+                  >
+                    Go to Campaigns ➔
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div>
+                <label
+                  htmlFor="campaign-select"
+                  style={{
+                    display: 'block',
+                    fontSize: '0.875rem',
+                    fontWeight: 600,
+                    color: '#374151',
+                    marginBottom: '0.5rem'
+                  }}
+                >
+                  Select Destination Campaign
+                </label>
+                <select
+                  id="campaign-select"
+                  value={selectedCampaignForAdd}
+                  onChange={(e) => setSelectedCampaignForAdd(e.target.value)}
+                  disabled={associatingLeads}
+                  style={{
+                    width: '100%',
+                    padding: '0.6rem 0.75rem',
+                    borderRadius: '6px',
+                    border: '1px solid #d1d5db',
+                    fontSize: '0.875rem',
+                    backgroundColor: '#ffffff',
+                    color: '#111827',
+                    marginBottom: '1rem',
+                    outline: 'none'
+                  }}
+                >
+                  {availableCampaigns.map((camp) => (
+                    <option key={camp._id} value={camp._id}>
+                      {camp.name} ({camp.status})
+                    </option>
+                  ))}
+                </select>
+
+                {/* Advisory warning if campaign is completed */}
+                {(() => {
+                  const selectedCamp = availableCampaigns.find((c) => c._id === selectedCampaignForAdd);
+                  if (selectedCamp && selectedCamp.status === 'completed') {
+                    return (
+                      <div
+                        style={{
+                          backgroundColor: '#fffbeb',
+                          border: '1px solid #fde68a',
+                          borderRadius: '6px',
+                          padding: '0.75rem',
+                          color: '#92400e',
+                          fontSize: '0.825rem',
+                          marginBottom: '1rem',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '0.5rem'
+                        }}
+                      >
+                        <span>ℹ️</span>
+                        <div>
+                          <strong>Advisory Notice:</strong> This campaign is completed. Adding leads will allow them to be sent if the campaign is re-dispatched, but completed campaigns may require reactivation.
+                        </div>
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
+
+                <div
+                  style={{
+                    backgroundColor: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    padding: '0.75rem 1rem',
+                    fontSize: '0.825rem',
+                    color: '#475569',
+                    marginBottom: '1.5rem',
+                    lineHeight: 1.4
+                  }}
+                >
+                  📋 <strong>Association details:</strong> Duplicate leads will be automatically skipped without duplicating entries. Lead status and contact details are preserved.
+                </div>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
+              <button
+                type="button"
+                disabled={associatingLeads}
+                onClick={() => setAddToCampaignModalOpen(false)}
+                style={{
+                  padding: '0.5rem 1rem',
+                  borderRadius: '6px',
+                  border: '1px solid #d1d5db',
+                  backgroundColor: '#ffffff',
+                  color: '#374151',
+                  fontSize: '0.875rem',
+                  fontWeight: 600,
+                  cursor: associatingLeads ? 'not-allowed' : 'pointer'
+                }}
+              >
+                Cancel
+              </button>
+              {availableCampaigns.length > 0 && (
+                <button
+                  type="button"
+                  disabled={
+                    associatingLeads ||
+                    loadingCampaigns ||
+                    !selectedCampaignForAdd ||
+                    selectedLeadIds.length > 1000
+                  }
+                  onClick={handleConfirmAddToCampaign}
+                  style={{
+                    padding: '0.5rem 1.1rem',
+                    borderRadius: '6px',
+                    border: 'none',
+                    backgroundColor: '#2563eb',
+                    color: '#ffffff',
+                    fontSize: '0.875rem',
+                    fontWeight: 600,
+                    cursor:
+                      associatingLeads ||
+                      loadingCampaigns ||
+                      !selectedCampaignForAdd ||
+                      selectedLeadIds.length > 1000
+                        ? 'not-allowed'
+                        : 'pointer',
+                    opacity:
+                      associatingLeads ||
+                      loadingCampaigns ||
+                      !selectedCampaignForAdd ||
+                      selectedLeadIds.length > 1000
+                        ? 0.7
+                        : 1
+                  }}
+                >
+                  {associatingLeads ? 'Adding...' : 'Add to Campaign'}
+                </button>
+              )}
             </div>
           </div>
         </div>

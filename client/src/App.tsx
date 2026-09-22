@@ -6,6 +6,7 @@ import { WorkflowEditor } from './pages/WorkflowEditor';
 import { LeadDiscovery } from './pages/LeadDiscovery';
 import { LeadCRM } from './pages/LeadCRM';
 import { EmailTemplates } from './pages/EmailTemplates';
+import { Campaigns } from './pages/Campaigns';
 
 interface HealthStatus {
   status: string;
@@ -16,7 +17,7 @@ interface HealthStatus {
 
 function AppContent() {
   const { user, workspace, isLoading, logout } = useAuth();
-  const [activeTab, setActiveTab] = useState<'discovery' | 'crm' | 'templates' | 'workflows' | 'editor' | 'health'>('discovery');
+  const [activeTab, setActiveTab] = useState<'discovery' | 'crm' | 'templates' | 'campaigns' | 'workflows' | 'editor' | 'health'>('discovery');
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
 
   const [health, setHealth] = useState<HealthStatus | null>(null);
@@ -180,6 +181,24 @@ function AppContent() {
               Email Templates
             </button>
             <button
+              onClick={() => {
+                setSelectedWorkflowId(null);
+                setActiveTab('campaigns');
+              }}
+              style={{
+                padding: '0.4rem 0.8rem',
+                border: 'none',
+                borderRadius: '6px',
+                backgroundColor: activeTab === 'campaigns' ? '#eff6ff' : 'transparent',
+                color: activeTab === 'campaigns' ? '#1d4ed8' : '#4b5563',
+                fontWeight: 600,
+                fontSize: '0.875rem',
+                cursor: 'pointer'
+              }}
+            >
+              Campaigns
+            </button>
+            <button
               onClick={handleBackToList}
               style={{
                 padding: '0.4rem 0.8rem',
@@ -261,11 +280,18 @@ function AppContent() {
         )}
 
         {activeTab === 'crm' && (
-          <LeadCRM onNavigateToDiscovery={() => setActiveTab('discovery')} />
+          <LeadCRM
+            onNavigateToDiscovery={() => setActiveTab('discovery')}
+            onNavigateToCampaigns={() => setActiveTab('campaigns')}
+          />
         )}
 
         {activeTab === 'templates' && (
           <EmailTemplates />
+        )}
+
+        {activeTab === 'campaigns' && (
+          <Campaigns onNavigateToTemplates={() => setActiveTab('templates')} />
         )}
 
         {activeTab === 'workflows' && (
