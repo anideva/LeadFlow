@@ -6,3 +6,4 @@ export * from './Campaign.model';
 export * from './CampaignLead.model';
 export * from './Workflow.model';
 export * from './WorkflowExecution.model';
+export * from './WorkspaceUsage.model';

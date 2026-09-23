@@ -1,12 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   searchProspects,
   enrichProspect,
   convertProspectToLead,
+  getDiscoveryConfig,
   DiscoveredProspect,
   DiscoverySearchResult,
-  SocialProfile
+  SocialProfile,
+  DiscoveryUsage
 } from '../api/discovery.api';
+
+
 import { exportProspectsToCsv } from '../utils/csv.util';
 
 const EXAMPLE_QUERIES = [
@@ -42,6 +46,25 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
+  // Experimental Apify provider selector state (controlled safely from backend flags)
+  const [apifyEnabled, setApifyEnabled] = useState(false);
+  const [selectedSource, setSelectedSource] = useState<'free' | 'apify'>('free');
+  const [apifyUsage, setApifyUsage] = useState<DiscoveryUsage | null>(null);
+  const [apifyLimitError, setApifyLimitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    getDiscoveryConfig()
+      .then((cfg) => {
+        if (cfg && cfg.apifyEnabled) {
+          setApifyEnabled(true);
+        }
+        if (cfg && cfg.usage) {
+          setApifyUsage(cfg.usage);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   const handleSearch = async (e?: React.FormEvent, searchQuery?: string) => {
     if (e) e.preventDefault();
     const effectiveQuery = (searchQuery !== undefined ? searchQuery : query).trim();
@@ -54,23 +77,41 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
     try {
       setSearching(true);
       setError(null);
+      setApifyLimitError(null);
       setConversionMsg(null);
 
-      const result = await searchProspects(effectiveQuery);
+      const providerParam = selectedSource === 'apify' ? 'apify' : undefined;
+      const result = await searchProspects(effectiveQuery, 8, undefined, providerParam);
       setSearchResult(result);
+
+      // Refresh workspace usage stats if returned in search metadata
+      if (result.metadata?.workspaceUsage) {
+        setApifyUsage(result.metadata.workspaceUsage);
+      }
     } catch (err: any) {
-      setError(err.message || 'Discovery search failed. Please try again.');
+      if (err.code === 'APIFY_WORKSPACE_DAILY_LIMIT_EXCEEDED' || err.statusCode === 429) {
+        setApifyLimitError(
+          err.message || 'Daily Apify discovery limit reached for this workspace. You can manually select Current Free Discovery.'
+        );
+        if (apifyUsage) {
+          setApifyUsage({ ...apifyUsage, remaining: 0, count: apifyUsage.limit });
+        }
+      } else {
+        setError(err.message || 'Discovery search failed. Please try again.');
+      }
     } finally {
       setSearching(false);
     }
   };
+
 
   const handleLoadMore = async () => {
     if (!searchResult?.nextCursor || loadingMore) return;
     try {
       setLoadingMore(true);
       setError(null);
-      const moreResult = await searchProspects(query, 8, searchResult.nextCursor);
+      const providerParam = selectedSource === 'apify' ? 'apify' : undefined;
+      const moreResult = await searchProspects(query, 8, searchResult.nextCursor, providerParam);
       setSearchResult({
         ...moreResult,
         prospects: [...searchResult.prospects, ...moreResult.prospects],
@@ -82,6 +123,7 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
       setLoadingMore(false);
     }
   };
+
 
   const handleExampleClick = (example: string) => {
     setQuery(example);
@@ -170,7 +212,82 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
           What kind of prospects are you looking for?
         </label>
 
+        {/* Minimal Discovery Source Toggle - rendered only when backend indicates Apify is enabled */}
+        {apifyEnabled && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '0.875rem', fontWeight: 600, color: '#4b5563' }}>Discovery Source:</span>
+            <div
+              style={{
+                display: 'inline-flex',
+                backgroundColor: '#f3f4f6',
+                borderRadius: '8px',
+                padding: '3px',
+                border: '1px solid #e5e7eb'
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setSelectedSource('free')}
+                style={{
+                  padding: '0.35rem 0.85rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: '6px',
+                  backgroundColor: selectedSource === 'free' ? '#ffffff' : 'transparent',
+                  color: selectedSource === 'free' ? '#1f2937' : '#6b7280',
+                  boxShadow: selectedSource === 'free' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                Current Free Discovery
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedSource('apify')}
+                style={{
+                  padding: '0.35rem 0.85rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: '6px',
+                  backgroundColor: selectedSource === 'apify' ? '#2563eb' : 'transparent',
+                  color: selectedSource === 'apify' ? '#ffffff' : '#6b7280',
+                  boxShadow: selectedSource === 'apify' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
+                  cursor: 'pointer'
+                }}
+              >
+                Apify Google Maps
+              </button>
+            </div>
+            {selectedSource === 'apify' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.75rem', color: '#b45309', backgroundColor: '#fef3c7', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid #fde68a' }}>
+                  Experimental Google Maps POI
+                </span>
+                {apifyUsage && (
+                  <span
+                    style={{
+                      fontSize: '0.75rem',
+                      color: apifyUsage.remaining === 0 ? '#b91c1c' : '#1e40af',
+                      backgroundColor: apifyUsage.remaining === 0 ? '#fef2f2' : '#eff6ff',
+                      padding: '0.2rem 0.55rem',
+                      borderRadius: '4px',
+                      border: apifyUsage.remaining === 0 ? '1px solid #fecaca' : '1px solid #bfdbfe',
+                      fontWeight: 600
+                    }}
+                  >
+                    Daily limit: {apifyUsage.remaining}/{apifyUsage.limit} searches left
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+        )}
+
         <form onSubmit={handleSearch} style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+
           <input
             id="prospect-search-input"
             type="text"
@@ -280,8 +397,73 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
         </div>
       )}
 
+      {/* Daily Apify Limit Exceeded Banner (User requirement: explain limit, tell user they can manually switch to Free, do NOT auto-switch) */}
+      {apifyLimitError && (
+
+        <div
+          style={{
+            backgroundColor: '#fffbeb',
+            border: '1px solid #fde68a',
+            color: '#92400e',
+            borderRadius: '8px',
+            padding: '1rem 1.25rem',
+            fontSize: '0.9rem',
+            marginBottom: '1.5rem',
+            boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: '0.75rem', flex: '1 1 300px' }}>
+              <span style={{ fontSize: '1.35rem', lineHeight: 1 }}>⚠️</span>
+              <div>
+                <strong style={{ fontSize: '0.95rem', color: '#78350f', display: 'block', marginBottom: '0.25rem' }}>
+                  Workspace Daily Apify Limit Reached (Cost Protection)
+                </strong>
+                <p style={{ margin: '0 0 0.5rem 0', color: '#92400e', lineHeight: 1.45 }}>
+                  {apifyLimitError}
+                </p>
+                <p style={{ margin: 0, fontSize: '0.85rem', color: '#b45309' }}>
+                  This limit protects your team against unexpected third-party API spend. You can manually switch to <strong>Current Free Discovery (OpenStreetMap)</strong> for unlimited prospect discovery, or wait until midnight UTC when your daily quota resets.
+                </p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedSource('free');
+                  setApifyLimitError(null);
+                }}
+                style={{
+                  backgroundColor: '#15803d',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '0.45rem 0.85rem',
+                  fontSize: '0.825rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
+                }}
+              >
+                Switch to Current Free Discovery →
+              </button>
+              <button
+                type="button"
+                onClick={() => setApifyLimitError(null)}
+                style={{ background: 'none', border: 'none', color: '#92400e', cursor: 'pointer', fontWeight: 600, padding: '0.25rem' }}
+                aria-label="Dismiss limit warning"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Error Banner */}
       {error && (
+
         <div
           style={{
             backgroundColor: '#fef2f2',
@@ -313,18 +495,46 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
           />
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           <p style={{ marginTop: '1rem', color: '#4b5563', fontSize: '0.95rem' }}>
-            Querying discovery provider and normalizing candidate prospects...
+            {selectedSource === 'apify'
+              ? 'Searching Google Maps via Apify...'
+              : 'Querying discovery provider and normalizing candidate prospects...'}
           </p>
+
         </div>
       )}
 
       {/* Search Results Area */}
       {!searching && searchResult && (
         <div>
+          {/* Apify Quota Exhaustion / Fallback Alert Banner */}
+          {searchResult.warning && (
+            <div
+              style={{
+                backgroundColor: '#fffbeb',
+                border: '1px solid #fde68a',
+                color: '#92400e',
+                borderRadius: '8px',
+                padding: '0.85rem 1.25rem',
+                fontSize: '0.9rem',
+                marginBottom: '1.25rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.75rem',
+                boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+              }}
+            >
+              <span style={{ fontSize: '1.25rem' }}>⚠️</span>
+              <div>
+                <strong>Notice:</strong> {searchResult.warning}
+              </div>
+            </div>
+          )}
+
           <div
             style={{
               display: 'flex',
               justifyContent: 'space-between',
+
               alignItems: 'center',
               marginBottom: '1.25rem',
               flexWrap: 'wrap',
@@ -444,7 +654,23 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                             >
                               {prospect.entityType}
                             </span>
-                            {prospect.source === 'development_sandbox' ? (
+                            {prospect.source?.startsWith('apify') ? (
+                              <span
+                                style={{
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  textTransform: 'uppercase',
+                                  backgroundColor: '#eff6ff',
+                                  color: '#1d4ed8',
+                                  border: '1px solid #bfdbfe',
+                                  padding: '0.15rem 0.45rem',
+                                  borderRadius: '4px',
+                                  letterSpacing: '0.025em'
+                                }}
+                              >
+                                Apify / Google Maps
+                              </span>
+                            ) : prospect.source === 'development_sandbox' ? (
                               <span
                                 style={{
                                   fontSize: '0.68rem',
@@ -477,6 +703,7 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                                 Real Listing
                               </span>
                             )}
+
                             {prospect.isEnriched && (
                               <span
                                 style={{

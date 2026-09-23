@@ -13,6 +13,7 @@ import {
 import { LeadService, CreateLeadDTO } from '../lead.service';
 import { Lead, ILead } from '../../models/Lead.model';
 import { AppError } from '../../utils/error.util';
+import { WorkspaceUsageService } from './workspace-usage.service';
 
 export class DiscoveryService {
   private static providerInstance: IDiscoveryProvider = DiscoveryProviderFactory.createProvider();
@@ -151,10 +152,35 @@ export class DiscoveryService {
   }
 
   /**
+   * Returns discovery configuration flags to frontend without leaking credentials.
+   */
+  public static async getConfig(workspaceId?: string): Promise<{
+    apifyEnabled: boolean;
+    defaultProvider: string;
+    usage?: { count: number; limit: number; remaining: number; date: string };
+  }> {
+    const apifyEnabled =
+      process.env.APIFY_ENABLED === 'true' &&
+      Boolean(process.env.APIFY_API_TOKEN?.trim()) &&
+      Boolean(process.env.APIFY_ACTOR_ID?.trim());
+
+    let usage = undefined;
+    if (workspaceId && apifyEnabled) {
+      usage = await WorkspaceUsageService.getDailyUsage(workspaceId);
+    }
+
+    return {
+      apifyEnabled,
+      defaultProvider: process.env.DISCOVERY_PROVIDER || 'osm_combined',
+      usage
+    };
+  }
+
+  /**
    * Executes a generic prospect search through the active discovery provider.
    */
   public static async search(
-    _workspaceId: string,
+    workspaceId: string,
     _userId: string,
     request: DiscoverySearchRequest
   ): Promise<DiscoverySearchResult> {
@@ -162,13 +188,116 @@ export class DiscoveryService {
       throw new AppError(400, 'Search query cannot be empty.');
     }
 
-    return await this.providerInstance.search({
+    // If request explicitly specifies Apify, execute with Tier-1 workspace usage protection
+    if (request.provider && request.provider.toLowerCase().startsWith('apify')) {
+      // 1. Tier 1: Check & reserve daily quota in MongoDB atomically
+      const reservation = await WorkspaceUsageService.reserveDailyRun(workspaceId);
+      if (!reservation.allowed) {
+        throw new AppError(
+          429,
+          `Daily Apify discovery limit reached (${reservation.maxLimit} searches/day for this workspace). You can manually select Current Free Discovery.`,
+          'APIFY_WORKSPACE_DAILY_LIMIT_EXCEEDED'
+        );
+      }
+
+      try {
+        const apifyProvider = DiscoveryProviderFactory.createProvider('apify');
+        const searchResult = await apifyProvider.search({
+          query: request.query.trim(),
+          limit: request.limit,
+          locationHint: request.locationHint,
+          cursor: request.cursor,
+          provider: request.provider
+        });
+
+        // Attach workspace quota metadata
+        searchResult.metadata = {
+          ...searchResult.metadata,
+          workspaceUsage: {
+            count: reservation.currentCount,
+            limit: reservation.maxLimit,
+            remaining: Math.max(0, reservation.maxLimit - reservation.currentCount),
+            date: reservation.date
+          }
+        };
+
+        return searchResult;
+      } catch (err: any) {
+        // Quota refund logic:
+        // Refund ONLY for transient network/timeout failures or upstream external quota limits
+        // where no successful Apify results could be obtained.
+        const isTransientNetworkOrTimeout =
+          err.statusCode === 504 ||
+          err.name === 'AbortError' ||
+          err.statusCode === 502 ||
+          err.statusCode === 503 ||
+          (typeof err.message === 'string' &&
+            (err.message.toLowerCase().includes('network') ||
+             err.message.toLowerCase().includes('timeout') ||
+             err.message.toLowerCase().includes('timed out') ||
+             err.message.toLowerCase().includes('econnrefused') ||
+             err.message.toLowerCase().includes('econnreset') ||
+             err.message.toLowerCase().includes('enotfound') ||
+             err.message.toLowerCase().includes('fetch failed')));
+
+        const isExternalApifyQuotaExhausted =
+          err.statusCode === 402 ||
+          (err.statusCode === 429 && err.code !== 'APIFY_WORKSPACE_DAILY_LIMIT_EXCEEDED') ||
+          (typeof err.message === 'string' &&
+            (err.message.toLowerCase().includes('quota') ||
+             err.message.toLowerCase().includes('billing') ||
+             err.message.toLowerCase().includes('credits') ||
+             err.message.toLowerCase().includes('exhausted')));
+
+        // Refund reserved quota count on transient network/timeout or upstream quota exhaustion
+        if (isTransientNetworkOrTimeout || isExternalApifyQuotaExhausted) {
+          await WorkspaceUsageService.refundDailyRun(workspaceId, reservation.date).catch((refErr) => {
+            console.error('[Discovery Service] Failed to refund daily Apify run:', refErr);
+          });
+        }
+
+        // If external Apify monthly quota is exhausted, gracefully fall back to Free OpenStreetMap
+        if (isExternalApifyQuotaExhausted) {
+          console.warn('[Discovery Service] Apify quota exhausted/limited. Gracefully falling back to Free OpenStreetMap:', err.message);
+
+          const fallbackResult = await this.providerInstance.search({
+            query: request.query.trim(),
+            limit: request.limit,
+            locationHint: request.locationHint,
+            cursor: request.cursor
+          });
+
+          return {
+            ...fallbackResult,
+            warning:
+              'Apify monthly free tier quota is exhausted. Automatically switched to Free OpenStreetMap discovery. You can continue prospecting with the free method while waiting for your Apify quota to renew.',
+            apifyQuotaExhausted: true,
+            fallbackUsed: true
+          };
+        }
+
+        throw err;
+      }
+    }
+
+    // Default provider execution (e.g. osm_combined or explicitly selected non-apify provider)
+    const providerToUse =
+      request.provider && request.provider !== 'osm_combined'
+        ? DiscoveryProviderFactory.createProvider(request.provider)
+        : this.providerInstance;
+
+
+    return await providerToUse.search({
       query: request.query.trim(),
       limit: request.limit,
       locationHint: request.locationHint,
-      cursor: request.cursor
+      cursor: request.cursor,
+      provider: request.provider
     });
   }
+
+
+
 
   /**
    * Converts a discovered prospect into a persistent LeadFlow CRM lead.

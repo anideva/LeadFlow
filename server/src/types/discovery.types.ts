@@ -48,7 +48,9 @@ export interface DiscoverySearchRequest {
   limit?: number;
   locationHint?: string;
   cursor?: string;
+  provider?: string;
 }
+
 
 export interface DiscoverySearchResult {
   query: string;
@@ -59,7 +61,11 @@ export interface DiscoverySearchResult {
   nextCursor?: string;
   attribution?: string;
   metadata?: Record<string, any>;
+  warning?: string;
+  apifyQuotaExhausted?: boolean;
+  fallbackUsed?: boolean;
 }
+
 
 export interface ConvertProspectRequest {
   prospect: DiscoveredProspect;

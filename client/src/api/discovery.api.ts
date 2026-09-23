@@ -45,7 +45,11 @@ export interface DiscoverySearchResult {
   nextCursor?: string;
   attribution?: string;
   metadata?: Record<string, any>;
+  warning?: string;
+  apifyQuotaExhausted?: boolean;
+  fallbackUsed?: boolean;
 }
+
 
 export interface ProspectEnrichmentResult {
   businessName?: string;
@@ -66,28 +70,62 @@ export interface ProspectEnrichmentResult {
   };
 }
 
+export interface DiscoveryUsage {
+  count: number;
+  limit: number;
+  remaining: number;
+  date: string;
+}
+
+export interface DiscoveryConfig {
+  apifyEnabled: boolean;
+  defaultProvider: string;
+  usage?: DiscoveryUsage;
+}
+
+/**
+ * Retrieves server discovery feature flags and provider configuration.
+ */
+export async function getDiscoveryConfig(): Promise<DiscoveryConfig> {
+  const res = await fetch('/api/discovery/config', {
+    headers: { 'Accept': 'application/json' },
+    credentials: 'include'
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    return { apifyEnabled: false, defaultProvider: 'osm_combined' };
+  }
+  return data.data;
+}
+
 /**
  * Searches for prospects using generic natural-language prospecting queries.
  */
 export async function searchProspects(
   query: string,
   limit = 8,
-  cursor?: string
+  cursor?: string,
+  provider?: string
 ): Promise<DiscoverySearchResult> {
   const res = await fetch('/api/discovery/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ query, limit, cursor })
+    body: JSON.stringify({ query, limit, cursor, provider })
   });
 
   const data = await res.json();
   if (!res.ok) {
-    throw new Error(data.error || 'Failed to discover prospects');
+    const error: any = new Error(data.error || 'Failed to discover prospects');
+    error.statusCode = res.status;
+    error.code = data.code;
+    throw error;
   }
 
   return data.data;
 }
+
+
 
 /**
  * Enriches a discovered prospect using its official public website.

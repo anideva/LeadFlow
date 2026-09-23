@@ -2,16 +2,36 @@ import { Request, Response } from 'express';
 import { DiscoveryService } from '../services/discovery/discovery.service';
 import { AppError } from '../utils/error.util';
 
+export const getDiscoveryConfig = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const config = await DiscoveryService.getConfig(req.user?.workspaceId);
+    res.status(200).json({
+      success: true,
+      data: config
+    });
+  } catch (error) {
+    console.error('[Discovery Controller - Config] Error:', error);
+    res.status(200).json({
+      success: true,
+      data: {
+        apifyEnabled: false,
+        defaultProvider: 'osm_combined'
+      }
+    });
+  }
+};
+
 export const searchProspects = async (req: Request, res: Response): Promise<void> => {
   try {
     const user = req.user!;
-    const { query, limit, locationHint, cursor } = req.body;
+    const { query, limit, locationHint, cursor, provider } = req.body;
 
     const result = await DiscoveryService.search(user.workspaceId, user.id, {
       query,
       limit: limit ? Number(limit) : undefined,
       locationHint,
-      cursor
+      cursor,
+      provider: typeof provider === 'string' ? provider.trim() : undefined
     });
 
     res.status(200).json({
@@ -20,9 +40,14 @@ export const searchProspects = async (req: Request, res: Response): Promise<void
     });
   } catch (error) {
     if (error instanceof AppError) {
-      res.status(error.statusCode).json({ success: false, error: error.message });
+      res.status(error.statusCode).json({
+        success: false,
+        error: error.message,
+        code: error.code
+      });
       return;
     }
+
 
     console.error('[Discovery Controller - Search] Error:', error);
     res.status(500).json({ success: false, error: 'Failed to discover prospects.' });

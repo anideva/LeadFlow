@@ -1,6 +1,9 @@
 import { IDiscoveryProvider } from './discovery.provider';
 import { DevelopmentDiscoveryProvider } from './providers/development.provider';
 import { OpenStreetMapDiscoveryProvider } from './providers/openstreetmap.provider';
+import { OpenStreetMapOverpassProvider } from './providers/overpass.provider';
+import { CompositeOSMDiscoveryProvider } from './providers/composite-osm.provider';
+import { ApifyDiscoveryProvider } from './providers/apify.provider';
 
 export class DiscoveryProviderFactory {
   /**
@@ -12,6 +15,20 @@ export class DiscoveryProviderFactory {
     const selected = (providerName || process.env.DISCOVERY_PROVIDER || 'development').trim().toLowerCase();
 
     switch (selected) {
+      case 'apify':
+      case 'apify_google_maps':
+        return new ApifyDiscoveryProvider();
+
+      case 'osm_combined':
+      case 'combined':
+      case 'openstreetmap_combined':
+        return new CompositeOSMDiscoveryProvider();
+
+
+      case 'overpass':
+      case 'openstreetmap_overpass':
+        return new OpenStreetMapOverpassProvider();
+
       case 'openstreetmap':
       case 'osm':
         return new OpenStreetMapDiscoveryProvider();

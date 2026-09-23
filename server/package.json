@@ -8,7 +8,11 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
+    "test:discovery": "tsx src/services/discovery/__tests__/discovery-v2.test.ts",
+    "test:apify": "tsx src/services/discovery/__tests__/apify-provider.test.ts",
+    "test:apify:usage": "tsx src/services/discovery/__tests__/apify-usage-limit.test.ts",
     "worker:dev": "tsx watch src/workers/workflow.worker.ts",
+
     "worker:start": "node dist/workers/workflow.worker.js"
   },
   "dependencies": {
