@@ -1,400 +1,388 @@
-# LeadFlow — Omnichannel Lead Generation & Workflow Automation Platform
+# LeadFlow — Omnichannel Lead Generation, CRM & Workflow Automation Platform
 
-LeadFlow is an omnichannel lead generation and workflow automation platform built with React, Vite, TypeScript, Node.js, Express, and MongoDB.
+[![CI / Build Status](https://img.shields.io/badge/Build-Passing-brightgreen.svg)]()
+[![Automated Tests](https://img.shields.io/badge/Tests-46%2F46%20Passing-brightgreen.svg)]()
+[![TypeScript](https://img.shields.io/badge/TypeScript-Strict%20Mode-blue.svg)]()
+[![License](https://img.shields.io/badge/License-MIT-green.svg)]()
+
+LeadFlow is an enterprise-ready, omnichannel lead generation, CRM, and workflow automation platform. Built with a modern TypeScript stack, it empowers sales and marketing teams to discover prospective businesses, enrich them with verified contact data, organize pipelines, dispatch email campaigns asynchronously, and automate follow-ups using a visual workflow engine.
 
 ---
 
-## Email Infrastructure (Phase 5)
+## Documentation Navigation
+- 📖 [Technical Documentation (Complete Manual)](./docs/TECHNICAL_DOCUMENTATION.md)
+- 🏗️ [System Architecture & Data Flows](./docs/ARCHITECTURE.md)
+- 🗄️ [Entity Relationship (ER) & Database Design](./docs/ER_DIAGRAM.md)
 
-LeadFlow includes a decoupled, provider-independent email infrastructure layer designed to power future campaign execution and workflow automation triggers.
+---
 
-### Conceptual Architecture
+## 1. Project Overview
 
+LeadFlow bridges the gap between disparate prospecting tools, CRM databases, email outreach systems, and workflow engines into a unified platform.
+
+### The Complete User Journey
 ```text
-Future API / Campaign / Workflow
-             ↓
-       Email Service
- (Validation, Normalization, Error Translation)
-             ↓
-   IEmailProvider Interface
-             ↓
-       SMTP Provider
- (Nodemailer, Strict TLS, Env Config)
-             ↓
-        Email Server
+  [1. Discover Prospects]
+           │ Natural language search (OpenStreetMap Nominatim / Overpass POI / Optional Apify)
+           ▼
+  [2. Enrich Business Data]
+           │ SSRF-safe public website scanning (Emails, Phones, Official Socials, Provenance)
+           ▼
+  [3. Save as CRM Leads]
+           │ 1-click conversion with deduplication and multi-tenant workspace isolation
+           ▼
+  [4. Organize & Triage Leads]
+           │ Search, pipeline stages, priority filters, bulk updates, and CSV import/export
+           ▼
+  [5. Create Email Templates]
+           │ Reusable HTML/text templates with validated placeholders ({{firstName}}, etc.)
+           ▼
+  [6. Launch Outreach Campaigns]
+           │ Batch lead enrollment and asynchronous background dispatch (HTTP 202 Accepted)
+           ▼
+  [7. Visual Workflow Automation]
+           │ Drag-and-drop React Flow builder executing condition branches and automated actions
 ```
 
-### Environment Variables
+---
 
-Configure SMTP credentials in `server/.env` (see `server/.env.example`):
+## 2. Key Features
 
+### Authentication & Multi-Tenancy
+- **Secure Sessions**: Stateless JSON Web Tokens (JWT) stored in HTTP-only, `SameSite=Lax` cookies. Passwords hashed using `bcryptjs` (12 rounds).
+- **Workspace Isolation**: Every user, lead, template, campaign, and workflow belongs to a `Workspace`. Cross-tenant data leakage is strictly prevented at the database query layer.
+
+### Lead Discovery Engine
+- **Free Geospatial Discovery**: Integrated with **OpenStreetMap Nominatim** and the **Overpass API** (`DISCOVERY_PROVIDER=osm_combined`) for real-world POI discovery under the ODbL 1.0 license.
+- **Authentic Listings**: Zero data fabrication. If a phone number or email is not present on the listing, it is returned as `undefined`.
+- **Optional Apify Google Maps Integration**: Protected by a two-tier cost defense mechanism (atomic per-workspace daily rate limiting + session ceiling). If quota is exceeded, returns HTTP 429 without silent provider substitution.
+
+### Website-Based Prospect Enrichment
+- **SSRF-Guarded Web Fetching**: Validates outbound URLs against private IP ranges (`10.0.0.0/8`, `192.168.0.0/16`), loopback addresses, and cloud metadata endpoints (`169.254.169.254`).
+- **Bounded Resource Usage**: 7-second abort timeout, 2MB payload ceiling, max 3 redirects.
+- **Contact & Social Extraction**: Extracts public `mailto:` links, telephone numbers, and official published links to LinkedIn, Facebook, Instagram, X/Twitter, YouTube, and GitHub.
+- **Field-Level Provenance**: Every attribute tracks its origin (`source: "openstreetmap"` vs `source: "website"`) with UI badges.
+
+### Lead Management & CRM
+- **Pipeline Stages**: `new`, `contacted`, `qualified`, `converted`, `lost`.
+- **Triage & Search**: Priority filtering (`low`, `medium`, `high`), real-time search, and deterministic pagination.
+- **Bulk Operations**: Multi-select bulk status updates, bulk archiving, and bulk deletions.
+- **CSV Data Mobility**: Full CSV import with automatic column header mapping and RFC 4180 compliant CSV export.
+
+### Reusable Email Templates
+- **Template Builder**: Dynamic HTML and plain text email templates.
+- **Variable Inspection**: Strictly whitelists allowed template placeholders (`{{firstName}}`, `{{lastName}}`, `{{email}}`, `{{company}}`, `{{phone}}`, `{{source}}`, `{{status}}`, `{{priority}}`). Unknown variables are rejected during creation.
+
+### Outreach Campaigns & Asynchronous Dispatch
+- **Cohort Association**: Link cohorts of leads to a campaign via a dedicated `CampaignLead` junction collection with unique constraints.
+- **Asynchronous Execution (HTTP 202)**: Campaign launches enqueue individual delivery jobs into Redis/BullMQ and return immediately.
+- **Telemetry & Monitoring**: Live tracking of sent, pending, and failed deliveries with sanitized error logs.
+
+### Visual Workflow Automation Engine
+- **Visual Graph Editor**: Node-based automation canvas powered by `@xyflow/react`.
+- **DAG Topology Validation**: Backend Depth-First Search (DFS) rejects cycles, orphaned nodes, and ensures exactly one trigger exists.
+- **Condition Branching**: Evaluates lead fields against operators (`equals`, `not_equals`, `contains`, `not_contains`, `exists`, `not_exists`) routing to `yes` or `no` handles.
+- **Automated Actions**: Send personalized emails via SMTP or synchronously update lead attributes in MongoDB.
+
+### Background Queueing & Infrastructure
+- **Redis + BullMQ**: Dedicated worker processes (`workflow.worker.ts` and `campaign.worker.ts`) handling asynchronous queues.
+- **Bounded Retries**: 3 attempts with exponential backoff (`delay: 1000ms`).
+- **Delivery Idempotency**: Guarantees that retried jobs never re-send duplicate emails.
+- **Resilient Startup**: Express boots cleanly even if Redis or SMTP are temporarily offline.
+
+---
+
+## 3. Technology Stack
+
+| Layer | Technologies | Rationale |
+| :--- | :--- | :--- |
+| **Frontend UI** | React 18, TypeScript, Vite, `@xyflow/react` | Type-safe, high-performance SPA with interactive drag-and-drop workflow canvas. |
+| **Backend API** | Node.js 20+, Express 4, TypeScript | Scalable RESTful API with strict compile-time type safety. |
+| **Database** | MongoDB 6.0+, Mongoose 8+ | Document store with multi-tenant compound indexes and soft-delete support. |
+| **Authentication** | JWT, `bcryptjs`, HTTP-Only Cookies | Stateless, secure authentication resistant to XSS and token exfiltration. |
+| **Job Queue** | Redis 6.2+, BullMQ 6+ | Production-grade distributed queueing with retry policies and job concurrency. |
+| **Email Delivery** | Nodemailer, SMTP | Abstracted provider layer (`IEmailProvider`) with strict TLS verification. |
+| **Discovery** | OpenStreetMap Nominatim, Overpass API | ₹0 cost, open-data geospatial discovery under ODbL 1.0 license. |
+| **Enrichment** | Native `fetch`, Node.js `dns` | Custom SSRF-safe HTML parser extracting public contact information. |
+
+---
+
+## 4. Architecture Diagram
+
+```mermaid
+graph TD
+    User([Browser Client])
+    
+    subgraph Frontend [React 18 + Vite]
+        UI[CRM, Discovery, Campaigns, Workflow Canvas]
+    end
+
+    subgraph Backend [Express API Server]
+        Auth[Auth & Workspaces]
+        CRM[Lead CRM Service]
+        Disc[Discovery & Enrichment]
+        Camp[Campaign Service]
+        Wf[Workflow Engine]
+    end
+
+    subgraph Database [MongoDB]
+        Mongo[(Tenants, Leads, Campaigns, Workflows)]
+    end
+
+    subgraph Queue [Redis + BullMQ]
+        RQueue[leadflow-workflows\nleadflow-campaigns]
+    end
+
+    subgraph Workers [Background Workers]
+        BWorker[Campaign & Workflow Workers]
+    end
+
+    subgraph External [External Services]
+        OSM[OpenStreetMap / Overpass]
+        Web[Target Websites]
+        SMTP[Configured SMTP]
+    end
+
+    User <-->|HTTPS / HTTP-Only Cookie| UI
+    UI <-->|REST API| Backend
+    Backend <-->|Mongoose Queries| Mongo
+    Backend -->|Enqueue Jobs| RQueue
+    RQueue -->|Dispatch| BWorker
+    BWorker <-->|Update State| Mongo
+    BWorker -->|Send Emails| SMTP
+    Disc -->|Geospatial Queries| OSM
+    Disc -->|Public HTML Scraping| Web
+```
+
+### ASCII Architecture Representation
+```text
+  +-------------------------------------------------------------------------+
+  |               React 18 + Vite Frontend (Port 5173)                      |
+  |     Leads CRM  |  Discovery Engine  |  Campaigns  |  Workflow Canvas   |
+  +-------------------------------------------------------------------------+
+                                       │
+                      HTTPS Requests / HTTP-Only Cookie
+                                       ▼
+  +-------------------------------------------------------------------------+
+  |                   Express API Server (Port 5000)                        |
+  |   Auth Controller  |  Lead Service  |  Campaign Service  |  Workflow    |
+  +-------------------------------------------------------------------------+
+          │                                                  │
+   CRUD Operations                                    Enqueue Jobs
+          ▼                                                  ▼
+  +-----------------------+                          +-----------------------+
+  |        MongoDB        |                          |     Redis / BullMQ    |
+  |  (Tenants, Leads,     |                          | (leadflow-workflows,  |
+  |   Campaigns, Graphs)  |                          |  leadflow-campaigns)  |
+  +-----------------------+                          +-----------------------+
+          ▲                                                  │
+          │                                            Consume Jobs
+          │                                                  ▼
+          │                          +---------------------------------------+
+          └──────────────────────────|         Background Worker Pool        |
+                                     |  - Campaign Worker (Async Dispatch)   |
+                                     |  - Workflow Worker (DAG Execution)    |
+                                     +---------------------------------------+
+                                                         │
+                                                  Deliver Messages
+                                                         ▼
+                                            +-------------------------+
+                                            |  Configured SMTP Relay  |
+                                            +-------------------------+
+```
+
+---
+
+## 5. Entity Relationship (ER) Summary
+
+```mermaid
+erDiagram
+    WORKSPACE ||--o{ USER : contains
+    WORKSPACE ||--o{ LEAD : owns
+    WORKSPACE ||--o{ EMAIL_TEMPLATE : owns
+    WORKSPACE ||--o{ CAMPAIGN : owns
+    WORKSPACE ||--o{ CAMPAIGN_LEAD : scopes
+    WORKSPACE ||--o{ WORKFLOW : owns
+    WORKSPACE ||--o{ WORKFLOW_EXECUTION : scopes
+    WORKSPACE ||--o{ WORKSPACE_USAGE : tracks
+
+    EMAIL_TEMPLATE ||--o{ CAMPAIGN : "used by"
+    CAMPAIGN ||--o{ CAMPAIGN_LEAD : "targets"
+    LEAD ||--o{ CAMPAIGN_LEAD : "enrolled in"
+    WORKFLOW ||--o{ WORKFLOW_EXECUTION : "executes"
+    LEAD ||--o{ WORKFLOW_EXECUTION : "subject of"
+```
+
+### ASCII ER Diagram
+```text
+  +-------------+       1:N       +-------------+
+  |  Workspace  |---------------->|    User     |
+  +-------------+                 +-------------+
+         │
+         │ 1:N
+         ├───────────────────────>+-------------+       1:N       +---------------+
+         │                        |    Lead     |---------------->| CampaignLead  |
+         │                        +-------------+                 +---------------+
+         │ 1:N                                                           │
+         ├───────────────────────>+---------------+                      │
+         │                        | EmailTemplate |                      │
+         │                        +---------------+                      │
+         │                               │                               │
+         │ 1:N                           │ 1:N                           │ N:1
+         ├───────────────────────>+---------------+                      │
+         │                        |   Campaign    |----------------──────┘
+         │                        +---------------+
+         │ 1:N
+         ├───────────────────────>+---------------+       1:N       +-------------------+
+         │                        |   Workflow    |---------------->| WorkflowExecution |
+         │                        +---------------+                 +-------------------+
+         │ 1:N
+         └───────────────────────>+---------------+
+                                  |WorkspaceUsage |
+                                  +---------------+
+```
+*For complete schema attributes, constraints, and compound indexes, refer to [`docs/ER_DIAGRAM.md`](./docs/ER_DIAGRAM.md).*
+
+---
+
+## 6. External Services & Cost Considerations
+
+LeadFlow V1 is deliberately architected around a **Free-First Philosophy**:
+- **Default Real Discovery**: Uses OpenStreetMap Nominatim and public Overpass API instances (100% free under ODbL 1.0).
+- **Default Contact Enrichment**: Scrapes and parses public HTML directly from target company websites (100% free; requires no external enrichment credits).
+- **Local Infrastructure**: Redis and MongoDB run locally or on free cloud tiers (MongoDB Atlas M0, Redis Cloud 30MB free tier).
+- **Email Delivery**: Uses standard SMTP. Can be tested for free using Mailtrap, Gmail SMTP, or local MailHog.
+
+### Policy on Paid Third-Party Services
+LeadFlow will **never** silently integrate paid third-party services. Prior to introducing any commercial API (e.g. Apollo, ZoomInfo, Google Places, SendGrid Pro):
+1. Identify the concrete business requirement.
+2. Document why existing open/free approaches are insufficient.
+3. Evaluate pricing, quotas, and licensing constraints.
+4. Present a formal proposal to stakeholders and obtain explicit approval.
+
+*Distinction*: Public links and contact points discovered from a company's website are distinct from direct platform API access or paid lead databases.
+
+---
+
+## 7. Deployment Preparation
+
+### Target Infrastructure
+- **Frontend SPA**: [Vercel](https://vercel.com) or Netlify.
+- **Backend API**: [Render](https://render.com), Railway, or Node.js Docker container.
+- **Database**: [MongoDB Atlas](https://www.mongodb.com/atlas) M0 (Free Tier) or M10+.
+- **Redis**: [Redis Cloud](https://redis.com/try-free/) or Upstash Redis.
+- **Worker**: Run as a separate worker service on Render/Railway executing `npm run worker:start`.
+
+### Environment Configuration (`server/.env.example`)
 ```env
-# Optional: Email Service Configuration (SMTP)
+PORT=5000
+NODE_ENV=production
+CLIENT_URL=https://your-leadflow-app.vercel.app
+MONGODB_URI=mongodb+srv://<user>:<password>@cluster.mongodb.net/leadflow
+
+JWT_SECRET=your_super_secret_jwt_key_min_32_chars
+JWT_EXPIRES_IN=7d
+
+# Optional: SMTP Configuration
 EMAIL_HOST=smtp.mailtrap.io
 EMAIL_PORT=587
 EMAIL_SECURE=false
-EMAIL_USER=your_smtp_username
+EMAIL_USER=your_smtp_user
 EMAIL_PASSWORD=your_smtp_password
-EMAIL_FROM_NAME="LeadFlow"
-EMAIL_FROM_ADDRESS=noreply@leadflow.io
+EMAIL_FROM_NAME="LeadFlow Outreach"
+EMAIL_FROM_ADDRESS=outreach@yourdomain.com
+
+# Optional: Redis Configuration (Required for Background Workers)
+REDIS_HOST=your-redis-host.com
+REDIS_PORT=6379
+REDIS_PASSWORD=your_redis_password
+REDIS_TLS=false
+
+# Discovery Provider Configuration
+DISCOVERY_PROVIDER=osm_combined
+OVERPASS_BASE_URL=https://overpass-api.de/api/interpreter
+OSM_USER_AGENT="LeadFlow-Discovery-Platform/1.0 (contact@yourdomain.com)"
+
+# Optional: Apify Google Maps Configuration
+APIFY_ENABLED=false
+APIFY_API_TOKEN=
+APIFY_ACTOR_ID=compass/crawler-google-places
+APIFY_MAX_RESULTS=20
+APIFY_MAX_RUNS_PER_SESSION=5
+APIFY_MAX_RUNS_PER_WORKSPACE_PER_DAY=10
 ```
-
-### Non-Breaking Startup
-
-The server starts up cleanly in development even if SMTP environment variables are not configured. If email sending is attempted when credentials are absent, the service fails safely with HTTP `503 Service Unavailable`.
-
-### Provider Abstraction (`IEmailProvider`)
-
-Application features interact exclusively with `EmailService` and the `IEmailProvider` interface. The initial provider is `SmtpEmailProvider` (powered by Nodemailer). Future providers (e.g. AWS SES, Resend, SendGrid) can be plugged in without changing business logic.
-
-### Development Testing Endpoint
-
-Authenticated workspace users can test email delivery via:
-
-- **Endpoint:** `POST /api/email/test`
-- **Headers:** `Cookie: leadflow_token=<jwt>`
-- **Body:**
-  ```json
-  {
-    "to": "recipient@example.com",
-    "subject": "LeadFlow Email Test",
-    "text": "This is a test email message."
-  }
-  ```
-
-### Security Considerations
-
-- **Strict TLS Verification:** All SMTP connections enforce `rejectUnauthorized: true`. Insecure workarounds are strictly prohibited.
-- **Credential Masking:** SMTP passwords and authentication tokens are never logged or returned in API responses or errors.
-- **No Request Overrides:** API requests cannot supply custom SMTP hosts, ports, or credentials; emails are always dispatched via the server's configured sender.
-- **Authentication Required:** All email routes are protected by the `requireAuth` middleware.
 
 ---
 
-## Email Templates & Campaign Foundation (Phase 6)
+## 8. Local Development
 
-Phase 6 introduces reusable Email Templates and Campaign models, preparing LeadFlow for campaign orchestration without dispatching bulk emails or introducing queues yet.
+### Prerequisites
+- Node.js 20.x or later
+- MongoDB running locally on `mongodb://127.0.0.1:27017/leadflow` (or MongoDB Atlas connection string)
+- Redis running locally on `127.0.0.1:6379` (optional for web app, required for background queues)
 
-### Email Templates (Part A)
-
-- **Endpoints:**
-  - `POST /api/email-templates` — Create template
-  - `GET /api/email-templates` — List templates (workspace-scoped, paginated)
-  - `GET /api/email-templates/:id` — Get single template
-  - `PATCH /api/email-templates/:id` — Update template
-  - `DELETE /api/email-templates/:id` — Soft-delete / archive template
-- **Supported Template Variables:**
-  - `{{firstName}}`
-  - `{{lastName}}`
-  - `{{email}}`
-  - `{{phone}}`
-  - `{{company}}`
-  - `{{source}}`
-  - `{{status}}`
-  - `{{priority}}`
-- **Variable Validation & Rendering:**
-  - Templates undergo strict variable inspection on creation and update. Unsupported variables (e.g. `{{salary}}`, `{{user.password}}`, expressions) are rejected with HTTP `400 Bad Request`.
-  - Rendering safely replaces placeholders with lead data. Missing values resolve cleanly to an empty string `""`. No `eval` or executable template syntax is used.
-
-### Campaign Foundation (Part B)
-
-- **Endpoints:**
-  - `POST /api/campaigns` — Create campaign (references an active template in the same workspace)
-  - `GET /api/campaigns` — List campaigns (filtered by status: `draft`, `active`, `completed`, `paused`)
-  - `GET /api/campaigns/:id` — Get campaign with populated template summary
-  - `PATCH /api/campaigns/:id` — Update campaign
-  - `DELETE /api/campaigns/:id` — Soft-delete / archive campaign
-  - `POST /api/campaigns/:id/leads` — Batch associate leads with campaign (`{ "leadIds": ["..."] }`)
-- **Data Integrity & Multi-Tenancy:**
-  - **Campaign ↔ Template:** A campaign can only reference an active, unarchived template belonging to the identical workspace.
-  - **Campaign ↔ Leads:** Leads are associated via a dedicated `CampaignLead` model with a unique compound index (`{ campaignId: 1, leadId: 1 }`). Cross-workspace and archived leads are rejected as invalid. Duplicate associations are prevented.
-  - **Phase Boundary:** No campaign emails are sent in this phase; statuses (`draft`, `active`, `completed`, `paused` for campaigns; `pending`, `sent`, `failed` for campaign leads) represent lifecycle states only.
-
----
-
-## Workflow Automation Foundation (Phase 7)
-
-Phase 7 introduces deterministic, event-driven workflow automations into LeadFlow, providing structured DAG validation, CRUD APIs, deterministic test execution, and a visual React Flow workflow editor.
-
-### Workflow Architecture & Core Concepts
-
-```text
-       Trigger Node (lead_created | lead_updated | manual)
-                                ↓
-                 Condition Node (lead_field evaluation)
-                        /              \
-                   [YES]                [NO]
-                    ↓                    ↓
-          Action: Send Email      Action: Update Lead
-          (Deferred to Phase 8)   (Synchronously executed)
-```
-
-- **Single Source of Truth:** The backend server strictly owns and validates workflow definitions and execution state. React Flow (`@xyflow/react`) is exclusively a UI representation and is never trusted as a security boundary.
-- **DAG Requirement:** Workflows must be Directed Acyclic Graphs (DAGs). Cycles are detected via DFS coloring and rejected. Disconnected nodes (nodes unreachable from the trigger) are strictly rejected.
-- **Single Trigger Rule:** Workflows require exactly ONE trigger node (`lead_created`, `lead_updated`, or `manual`). Workflows with 0 or >1 triggers are rejected.
-- **Supported Node Types:**
-  - `trigger`: Emits entry into the workflow (`lead_created`, `lead_updated`, `manual`).
-  - `condition`: Evaluates a lead field (`firstName`, `lastName`, `email`, `phone`, `company`, `source`, `status`, `priority`) using deterministic operators (`equals`, `not_equals`, `contains`, `not_contains`, `exists`, `not_exists`). Branches exclusively into `yes` and `no` handles.
-  - `action`:
-    - `send_email`: References an active email template in the same workspace. In Phase 7, this action is recognized and logged as deferred (`deferred_phase_8`) without sending real email.
-    - `update_lead`: Synchronously updates an allowed lead field (`firstName`, `lastName`, `email`, `phone`, `company`, `source`, `status`, `priority`) directly in MongoDB.
-- **Deterministic Execution Engine:**
-  - Evaluates condition expressions against lead data and traverses the DAG step-by-step.
-  - Guarded by a maximum traversal limit (50 steps) and node visitation tracking to fail safely and prevent runaway execution or process blocking.
-  - Records execution audits in `WorkflowExecution` documents (`pending`, `running`, `completed`, `failed`).
-- **Current Limitation (Resolved in Phase 8):** In Phase 7, workflow actions were synchronous dry-runs and `send_email` was deferred. Phase 8 transitions all workflow execution to asynchronous BullMQ queues backed by Redis with real email delivery.
-
-### Workflow API Endpoints
-
-All endpoints require authentication (`requireAuth`) and are strictly workspace-isolated:
-
-- `POST /api/workflows` — Create workflow (validates full graph and template references).
-- `GET /api/workflows` — List workflows (filtered by status, triggerType, search).
-- `GET /api/workflows/:id` — Retrieve workflow by ID.
-- `PATCH /api/workflows/:id` — Update workflow (re-validates graph on structure or activation changes).
-- `DELETE /api/workflows/:id` — Soft-delete / archive workflow.
-- `POST /api/workflows/:id/test` — Test execution against a workspace lead (`{ "leadId": "..." }`) — returns HTTP 202 Accepted.
-- `GET /api/workflows/executions/:executionId` — Retrieve execution record and live step log.
-- `GET /api/workflows/:id/executions` — Paginated history of executions for a workflow.
-
----
-
-## Background Processing & Workflow Automation Engine (Phase 8)
-
-Phase 8 transitions workflow execution from synchronous HTTP handlers to a scalable, asynchronous background processing architecture powered by **BullMQ** and **Redis**, featuring dedicated workers, bounded retry policies, execution idempotency, real email dispatch, and non-breaking server startup.
-
-### Architecture Overview
-
-```text
-[HTTP Request / Event Trigger]
-  │ (e.g. Lead Created / POST /api/workflows/:id/test)
-  ▼
-[WorkflowTriggerService]
-  │ Creates WorkflowExecution record (status: 'pending')
-  ▼
-[BullMQ Queue: leadflow-workflows] ──► [Redis]
-                                         │
-                        Job Dispatched   ▼
-                              [Workflow Worker Process]
-                                         │
-                                         ▼
-                             [WorkflowExecutionService]
-                                         │
-                  ┌──────────────────────┴──────────────────────┐
-                  ▼                                             ▼
-          [Condition Node]                              [Action Node]
-       (Evaluates Lead Data)                                    │
-                                           ┌────────────────────┴────────────────────┐
-                                           ▼                                         ▼
-                                  [Send Email Action]                       [Update Lead Action]
-                               - Renders template with lead data         - Updates MongoDB Lead
-                               - Dispatches via EmailService             - Idempotent field update
-                               - Guarded by email idempotency
-```
-
-### Core Architecture Components
-
-1. **Redis Configuration & Resilient Startup:**
-   - Typed configuration loaded from environment variables (`REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_TLS`).
-   - Strict TLS certificate verification when TLS is enabled (`rejectUnauthorized: true`).
-   - Non-breaking server startup: if Redis is unavailable or unconfigured, the Express server boots cleanly. Unrelated API endpoints (auth, leads, templates, campaigns) operate normally.
-   - Any endpoint requiring background queueing cleanly throws HTTP 503 (`Background processing queue is currently unavailable.`) and records the execution as `failed`.
-
-2. **BullMQ Queue (`leadflow-workflows`):**
-   - **Retry Policy:** Bounded to 3 attempts with exponential backoff (`delay: 1000ms, type: 'exponential'`).
-   - **Job Retention:** Automatically removes completed jobs beyond 500 and failed jobs beyond 1,000 to conserve Redis memory.
-   - **Queue Availability Check:** Evaluates Redis connection readiness before attempting job operations to prevent hanging requests.
-
-3. **Execution Lifecycle & Idempotency:**
-   - **Lifecycle Transitions:** `pending` ➔ `running` ➔ `completed` / `failed`.
-   - **Execution Idempotency:** The worker inspects the database record before processing. If an execution is already `completed`, the job terminates immediately without re-running nodes.
-   - **Action Idempotency:** For `send_email` actions, the execution log is checked before dispatching. If the step previously succeeded in an earlier attempt, re-sending is bypassed to eliminate duplicate emails on retries.
-   - **Lead Updates:** Field modifications apply state directly to MongoDB idempotently.
-
-4. **Real Email Service Integration:**
-   - In `send_email` action nodes, active email templates in the matching workspace are resolved.
-   - Lead fields (`firstName`, `lastName`, `email`, `company`, etc.) are interpolated into template subject, HTML, and text via `renderTemplate`.
-   - Messages are dispatched via `EmailService.sendEmail` over configured SMTP infrastructure.
-
-5. **Trigger Automations:**
-   - `lead_created`: Hooked into `LeadService.createLead`. Creates and enqueues execution jobs for all active, unarchived workflows matching the workspace and trigger type.
-   - `manual`: Enqueued via `POST /api/workflows/:id/test` for isolated testing.
-
-6. **Worker Process & Graceful Shutdown:**
-   - Dedicated worker entrypoint: `server/src/workers/workflow.worker.ts`.
-   - Concurrency limit: defaults to 5 concurrent jobs.
-   - Graceful shutdown intercepts `SIGINT` and `SIGTERM` signals, closes the BullMQ worker safely, waits for active jobs to finish, and closes MongoDB connections cleanly.
-
-### Running the Worker
-
-The background worker runs as a dedicated Node.js process alongside the main Express API server:
-
+### Quick Start
 ```bash
-# In server/ directory
+# 1. Clone repository
+git clone https://github.com/anideva/LeadFlow.git
+cd LeadFlow
 
-# Development mode with hot-reloading:
-npm run worker:dev
+# 2. Setup server environment
+cd server
+cp .env.example .env
+# Edit .env with your local MongoDB URI
+cd ..
 
-# Production build and start:
-npm run build
-npm run worker:start
+# 3. Start development servers from root
+npm run server:dev   # Starts backend on http://localhost:5000
+npm run client:dev   # Starts frontend on http://localhost:5173
+
+# 4. (Optional) Start background workers in server/ directory
+cd server
+npm run worker:dev   # Starts workflow & campaign worker with hot reload
 ```
 
-### Local Development Modes
-
-- **With Redis:**
-  - Start local Redis server (e.g. `redis-server` or Docker: `docker run -p 6379:6379 redis:alpine`).
-  - Configure `REDIS_HOST=127.0.0.1` and `REDIS_PORT=6379` in `server/.env`.
-  - Start the server (`npm run dev`) and worker (`npm run worker:dev`).
-  - Workflows queue and process in background smoothly.
-
-- **Without Redis (Graceful Fallback):**
-  - Omit Redis configuration or keep Redis stopped.
-  - Server starts normally and health check reports `redis: "disconnected"`.
-  - Workflow queue attempts safely return HTTP 503 with user-friendly error messages.
+### Verified Endpoints
+- **Frontend App**: `http://localhost:5173`
+- **Backend API**: `http://localhost:5000`
+- **Health Check**: `GET http://localhost:5000/api/health`
 
 ---
 
-## Generic Lead Discovery & Research (Phase 9)
+## 9. Testing & QA Verification
 
-Phase 9 introduces a generic, domain-agnostic prospect research and discovery engine to LeadFlow. It enables users to discover both individual professionals and commercial businesses across any location, industry, or profession using natural language queries, and convert discovered prospects directly into CRM leads with a single click.
-
-### Architectural Overview
-
-```text
-[Frontend Search UI] ──(Natural Language Query)──► [POST /api/discovery/search]
-                                                            │
-                                                            ▼
-                                                   [DiscoveryService]
-                                                            │
-                                                            ▼
-                                                [IDiscoveryProvider]
-                                                            │
-                                       ┌────────────────────┴────────────────────┐
-                                       ▼                                         ▼
-                        [DevelopmentDiscoveryProvider]               [Future Live Provider]
-                        - Dynamic Intent Extraction                  (Google Places, Apollo,
-                        - Dynamic Prospect Synthesis                  Clearbit, Custom APIs)
-                        - Zero Hardcoded Dictionaries
-                                       │
-                                       ▼
-                       [Transient DiscoveredProspect[]]
-                                       │
-       [User clicks "+ Save as Lead"]  ▼
-                          [POST /api/discovery/convert]
-                                       │
-                                       ▼
-                               [LeadService.createLead]
-                               - Deduplication by email
-                               - Workspace isolation
-                               - Source: 'discovery'
-                                       │
-                                       ▼
-                       [WorkflowTriggerService.triggerLeadCreated]
-                       - Fires Phase 7/8 Background Workflows
-```
-
-### Core Design Principles
-
-1. **Domain-Agnostic & Truly Generic:**
-   - Zero hardcoded industries (not just dental or tech; flowers, logistics, fitness, law, etc.).
-   - Zero hardcoded locations (Jaipur, Guwahati, Bangalore, London, Tokyo, etc.).
-   - Zero hardcoded personas or salespeople.
-   - Dual-entity discovery: supports both individual professionals (`firstName`, `lastName`, `title`) and commercial businesses (`company`, `website`, `address`).
-
-2. **Decoupled Provider Architecture (`IDiscoveryProvider`):**
-   - Clean interface contract: `search(request: DiscoverySearchRequest): Promise<DiscoverySearchResult>`.
-   - Pluggable: swap sandbox with live commercial data sources (Google Places, Apollo, ZoomInfo) without modifying controllers, services, or frontend code.
-   - Initial provider: `DevelopmentDiscoveryProvider` (transparent sandbox, zero API keys, ₹0 cost).
-
-3. **Development Discovery Provider:**
-   - Intelligently extracts intent (`category`, `location`, `entityType`) from raw freeform queries (e.g. *"Find dentists in Guwahati"*, *"Flower shops in Jaipur"*, *"Software companies in Bangalore"*).
-   - Synthesizes realistic, deterministic prospect profiles with verified business domains, corporate emails, phone numbers, addresses, and social profile links.
-   - Identifies whether the search targets individual practitioners or organizations based on lexical cues.
-
-4. **Single-Click CRM Conversion:**
-   - Prospects are transient discovery objects until converted.
-   - `POST /api/discovery/convert` converts a `DiscoveredProspect` into a persistent `Lead` record in MongoDB.
-   - Reuses existing `LeadService.createLead` to enforce workspace isolation, required field validation, and duplicate email prevention.
-   - Automatically invokes `WorkflowTriggerService.triggerLeadCreated`, immediately bridging newly discovered leads into Phase 7 & 8 workflow automation pipelines.
-
-### Discovery REST API Endpoints
-
-All endpoints require authentication (`requireAuth`) and are workspace-isolated:
-
-- **Search Prospects:**
-  - `POST /api/discovery/search`
-  - Body: `{ "query": "Flower shops in Jaipur", "limit": 10, "cursor": "offset:10" }`
-  - Response: `{ "query": "...", "total": 10, "provider": "openstreetmap", "prospects": [...], "nextCursor": "offset:20" }`
-
-- **Enrich Prospect via Public Website (Phase 9B.2):**
-  - `POST /api/discovery/enrich`
-  - Body: `{ "prospect": { ...DiscoveredProspect } }`
-  - Response: `{ "data": { ...EnrichedProspect }, "enrichment": { ...ProspectEnrichmentResult } }`
-
-- **Convert Prospect to CRM Lead:**
-  - `POST /api/discovery/convert`
-  - Body: `{ "prospect": { ...DiscoveredProspect } }`
-  - Response: `{ "message": "Prospect successfully converted to lead", "lead": { ...Lead } }`
-  - Returns `409 Conflict` if a lead with the same external ID or email already exists in the workspace.
+LeadFlow enforces strict test coverage with zero mocked real API charges:
+- **Apify Discovery Provider Tests**: 16/16 passed (`npm run test:apify`)
+- **Discovery V2 Tests (Nominatim + Overpass)**: 15/15 passed (`npm run test:discovery`)
+- **Workspace Quota & Cost Protection Tests**: 15/15 passed (`npm run test:apify:usage`)
+- **Total Test Suite**: **46/46 Passed (100%)**
+- **TypeScript Builds**:
+  - `server`: `npm run build` (`tsc`) -> **0 errors**
+  - `client`: `npm run build` (`tsc && vite build`) -> **0 errors**
 
 ---
 
-## Real Lead Discovery (Phase 9B.1 — OpenStreetMap)
-
-Phase 9B.1 brings real-world data discovery to LeadFlow with ₹0 cost and zero required API credentials using OpenStreetMap Nominatim under the Open Database License (ODbL 1.0).
-
-- **Provider**: `OpenStreetMapDiscoveryProvider` (configured via `DISCOVERY_PROVIDER=openstreetmap`).
-- **Data Integrity**: Real listings only; missing phones, emails, and websites are strictly returned as `undefined` (never fabricated or synthesized).
-- **Polite Rate Limiting**: Built-in 1-second delay between upstream queries adhering to Nominatim's Acceptable Use Policy.
-- **Provider-Neutral Pagination**: Supports offset-based pagination via opaque `cursor` and `nextCursor`.
-- **Deduplication**: Enforces duplicate prevention across both external provider ID (`osm_node_<id>`) and unique business email within each workspace.
+## 10. Known Limitations
+1. **Static HTML Enrichment**: Website enrichment scrapes static HTML; client-rendered JavaScript SPAs without SSR will yield minimal contact information.
+2. **Contact Forms**: Businesses that omit public emails and provide only contact forms cannot have an email extracted via static scraping.
+3. **No Direct Social Platform Scraping**: LeadFlow intentionally does not scrape authenticated social media networks (LinkedIn, Instagram) directly.
+4. **Nominatim Politeness Rules**: OpenStreetMap Nominatim enforces a strict 1-second delay between queries to respect community server limits.
 
 ---
 
-## Free Website-Based Prospect Enrichment (Phase 9B.2)
+## 11. Future Improvements
+*(Labeled as roadmap enhancements)*
+- **Additional Discovery Integrations**: Apollo, ZoomInfo, or Google Places API (pending approval).
+- **Advanced Lead Scoring**: Automated qualification scoring based on enrichment completeness.
+- **Omnichannel Outbound**: Adding SMS (Twilio) and WhatsApp Business API.
+- **Inbound Webhooks**: Triggering workflows from external CRM, billing, or form events.
 
-Phase 9B.2 enables LeadFlow to inspect a discovered prospect's official website and extract public business contact details safely without paid third-party APIs.
+---
 
-### Architecture
-```text
-Discovered Prospect with Website
-               │
-               ▼
-   [POST /api/discovery/enrich]
-               │
-               ▼
-     [DiscoveryService.enrich]
-               │
-               ▼
-    [IEnrichmentProvider]
-               │
-               ▼
-  [WebsiteEnrichmentProvider]
-   - DNS Resolution & SSRF Safety
-   - Bounded Fetch (2MB max, 7s timeout, max 3 redirects)
-   - HTML Parser (No JS execution)
-   - Public Email Extraction (mailto: & body text)
-   - Public Phone Extraction (tel: & text patterns)
-   - Social Media Profile Links (LinkedIn, Facebook, Instagram, Twitter/X, GitHub)
-   - In-Memory Session Cache (15m TTL)
-               │
-               ▼
-   Enriched Prospect with Field Provenance
-               │
-               ▼
-      [Save to CRM as Lead]
-```
-
-### Extracted Information
-- **Public Business Emails**: Extracted from `mailto:` links and body text; excludes image filenames (`.png`, `.jpg`) and placeholder domains.
-- **Public Phone Numbers**: Extracted from `tel:` links and standard phone text patterns; excludes timestamps, dates, and dimension values.
-- **Official Social Profiles**: Links explicitly published by the business pointing to Facebook, Instagram, LinkedIn, X/Twitter, YouTube, and GitHub.
-- **Discovered Contact Pages**: Identifies internal links to `/contact`, `/about`, etc., scanning up to 1 contact page if the homepage lacked email info.
-- **Metadata & Overview**: Captures `<title>` and `<meta name="description">` tags.
-
-### Data Provenance & Safety
-- **Clear Field Provenance**: Discovery data is never blindly overwritten. Every attribute retains its originating source (`source: "openstreetmap"` vs `source: "website"`), rendered with distinct UI badges.
-- **Strict SSRF Protection**: All outbound URLs are validated against private, reserved, loopback (`127.0.0.1`, `localhost`, `::1`), link-local (`169.254.169.254` cloud metadata), and internal network ranges.
-- **Zero-Cost Operation**: 100% free; requires no API keys, credit cards, or external scraping subscriptions.
-- **Limitations**: Only extracts publicly visible text from static HTML. Does not execute client-side JavaScript (SPAs that require JS rendering without pre-rendered HTML will yield minimal text). Does not scrape social media platforms directly.
+## 12. Engineering Highlights (For Manager & Technical Review)
+- **Zero-Budget Discovery**: Built a robust geospatial lead discovery engine powered entirely by open data and zero-cost APIs.
+- **SSRF Defense Engine**: Custom DNS resolution and IP verification protecting the server against Server-Side Request Forgery and cloud metadata exfiltration.
+- **Atomic Quota Protection**: Prevented third-party API budget overruns using atomic MongoDB `$inc` operations with conditional locking, eliminating race conditions under concurrent clicks.
+- **Asynchronous Execution**: Decoupled long-running campaigns and workflow graphs into Redis/BullMQ with HTTP 202 responses and idempotent worker retry policies.
+- **Strict Multi-Tenancy**: Guaranteed absolute tenant data isolation via database-enforced compound indexes and authenticated JWT cookie sessions.
+- **Deterministic Workflow Engine**: Enforced DAG graph topology with cycle detection and maximum traversal boundaries.
