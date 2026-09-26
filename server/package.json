@@ -12,7 +12,6 @@
     "test:apify": "tsx src/services/discovery/__tests__/apify-provider.test.ts",
     "test:apify:usage": "tsx src/services/discovery/__tests__/apify-usage-limit.test.ts",
     "worker:dev": "tsx watch src/workers/workflow.worker.ts",
-
     "worker:start": "node dist/workers/workflow.worker.js"
   },
   "dependencies": {
@@ -39,6 +38,6 @@
     "@types/node": "^20.14.9",
     "@types/nodemailer": "^8.0.1",
     "tsx": "^4.16.2",
-    "typescript": "^5.5.3"
+    "typescript": "~5.9.3"
   }
 }
