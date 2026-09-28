@@ -11,6 +11,10 @@
     "test:discovery": "tsx src/services/discovery/__tests__/discovery-v2.test.ts",
     "test:apify": "tsx src/services/discovery/__tests__/apify-provider.test.ts",
     "test:apify:usage": "tsx src/services/discovery/__tests__/apify-usage-limit.test.ts",
+    "worker:workflow:dev": "tsx watch src/workers/workflow.worker.ts",
+    "worker:workflow:start": "node dist/workers/workflow.worker.js",
+    "worker:campaign:dev": "tsx watch src/workers/campaign.worker.ts",
+    "worker:campaign:start": "node dist/workers/campaign.worker.js",
     "worker:dev": "tsx watch src/workers/workflow.worker.ts",
     "worker:start": "node dist/workers/workflow.worker.js"
   },

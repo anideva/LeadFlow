@@ -57,28 +57,6 @@ export const createWorkflowWorker = (): Worker<WorkflowJobData> => {
     console.warn('[Workflow Worker Error]:', err.message);
   });
 
-  // Graceful shutdown handling
-  const gracefulShutdown = async (signal: string) => {
-    console.log(`\n[Workflow Worker] Received ${signal}. Starting graceful shutdown...`);
-    try {
-      await worker.close();
-      console.log('[Workflow Worker] BullMQ worker closed successfully.');
-
-      if (mongoose.connection.readyState !== 0) {
-        await mongoose.connection.close();
-        console.log('[Workflow Worker] Database connection closed.');
-      }
-
-      process.exit(0);
-    } catch (shutdownErr: any) {
-      console.error('[Workflow Worker] Error during worker shutdown:', shutdownErr.message);
-      process.exit(1);
-    }
-  };
-
-  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
-  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-
   return worker;
 };
 
@@ -93,6 +71,28 @@ if (require.main === module) {
       await connectDB();
       const worker = createWorkflowWorker();
       console.log(`[Workflow Worker] Listening for jobs on queue "${WORKFLOW_QUEUE_NAME}" (Concurrency: ${DEFAULT_CONCURRENCY})`);
+
+      // Graceful shutdown handling for standalone process execution
+      const gracefulShutdown = async (signal: string) => {
+        console.log(`\n[Workflow Worker] Received ${signal}. Starting graceful shutdown...`);
+        try {
+          await worker.close();
+          console.log('[Workflow Worker] BullMQ worker closed successfully.');
+
+          if (mongoose.connection.readyState !== 0) {
+            await mongoose.connection.close();
+            console.log('[Workflow Worker] Database connection closed.');
+          }
+
+          process.exit(0);
+        } catch (shutdownErr: any) {
+          console.error('[Workflow Worker] Error during worker shutdown:', shutdownErr.message);
+          process.exit(1);
+        }
+      };
+
+      process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+      process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
     } catch (err: any) {
       console.error('[Workflow Worker Fatal] Failed to start worker process:', err.message);
       process.exit(1);

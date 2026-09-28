@@ -1,7 +1,9 @@
 import { Request, Response } from 'express';
 import mongoose from 'mongoose';
 import { isQueueAvailable } from '../queues/workflow.queue';
+import { isCampaignQueueAvailable } from '../queues/campaign.queue';
 import { getRedisConfig } from '../config/redis.config';
+import { getWorkersHealthReport } from '../workers/worker.registry';
 
 const getDatabaseStatus = (): string => {
   switch (mongoose.connection.readyState) {
@@ -22,10 +24,17 @@ export const getHealthStatus = async (_req: Request, res: Response): Promise<voi
   let queueStatus = 'unavailable';
 
   try {
-    const queueOnline = await isQueueAvailable();
-    if (queueOnline) {
+    const [workflowQueueOnline, campaignQueueOnline] = await Promise.all([
+      isQueueAvailable(),
+      isCampaignQueueAvailable()
+    ]);
+
+    if (workflowQueueOnline && campaignQueueOnline) {
       redisStatus = 'connected';
       queueStatus = 'available';
+    } else if (workflowQueueOnline || campaignQueueOnline) {
+      redisStatus = 'connected';
+      queueStatus = 'degraded';
     } else if (!redisConfig.isConfigured) {
       redisStatus = 'not_configured';
       queueStatus = 'unavailable';
@@ -35,6 +44,9 @@ export const getHealthStatus = async (_req: Request, res: Response): Promise<voi
     queueStatus = 'unavailable';
   }
 
+  // Worker polling loop status (loop state only, does not imply verified job execution)
+  const workersHealth = getWorkersHealthReport();
+
   res.status(200).json({
     status: 'ok',
     service: 'LeadFlow Backend API',
@@ -42,6 +54,7 @@ export const getHealthStatus = async (_req: Request, res: Response): Promise<voi
     timestamp: new Date().toISOString(),
     database: getDatabaseStatus(),
     redis: redisStatus,
-    queue: queueStatus
+    queue: queueStatus,
+    workers: workersHealth
   });
 };

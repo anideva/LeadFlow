@@ -26,21 +26,6 @@ export const connectDB = async (): Promise<typeof mongoose> => {
       console.warn('[Database] MongoDB disconnected');
     });
 
-    // Graceful process termination handlers
-    const gracefulExit = async () => {
-      try {
-        await mongoose.connection.close();
-        console.log('[Database] MongoDB connection closed due to application termination');
-        process.exit(0);
-      } catch (err) {
-        console.error('[Database] Error closing MongoDB connection:', err);
-        process.exit(1);
-      }
-    };
-
-    process.on('SIGINT', gracefulExit);
-    process.on('SIGTERM', gracefulExit);
-
     // Connection options:
     // - serverSelectionTimeoutMS: 5000 prevents long stalls on unreachable databases.
     // - tlsAllowInvalidCertificates: Strictly restricted to development (NODE_ENV === 'development')
@@ -55,5 +40,21 @@ export const connectDB = async (): Promise<typeof mongoose> => {
   } catch (error) {
     console.error('[Database] Failed to establish initial MongoDB connection:', error);
     throw error;
+  }
+};
+
+/**
+ * Gracefully disconnects MongoDB connection without abruptly calling process.exit().
+ * Coordinated by top-level process shutdown managers.
+ */
+export const disconnectDB = async (): Promise<void> => {
+  if (mongoose.connection.readyState !== 0) {
+    try {
+      await mongoose.connection.close();
+      console.log('[Database] MongoDB connection closed.');
+    } catch (err) {
+      console.error('[Database] Error closing MongoDB connection:', err);
+      throw err;
+    }
   }
 };
