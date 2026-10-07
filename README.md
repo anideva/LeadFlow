@@ -122,35 +122,41 @@ LeadFlow/
 - **MongoDB**: A running local MongoDB instance (`mongodb://127.0.0.1:27017/leadflow`) or a MongoDB Atlas connection URI
 - **Redis**: A local Redis instance (`127.0.0.1:6379`) or a cloud Redis service (such as Upstash) for background queue processing
 
-### Clone the Repository
+## Run Locally
+
+Follow these steps if you want to run LeadFlow on your own computer instead of using the live demo.
+
+### 1. Clone the repository
+
+Open PowerShell, Command Prompt, or terminal:
 
 ```bash
 git clone https://github.com/anideva/LeadFlow.git
 cd LeadFlow
 ```
 
-### Install Dependencies
+### 2. Install backend dependencies
 
-Install dependencies separately for the server and client:
+From the project root:
 
 ```bash
 cd server
-npm install
-
-cd ../client
 npm install
 ```
 
-### Environment Variables
+### 3. Configure the backend
 
-Configuration is handled through environment variables. The server directory includes an example configuration file at `server/.env.example`.
-
-Create a `.env` file in the `server` directory:
+Create the environment file:
 
 ```bash
-cd server
+# Windows (PowerShell)
+Copy-Item .env.example .env
+
+# macOS / Linux
 cp .env.example .env
 ```
+
+Open `server/.env` and configure your MongoDB, Redis, JWT, SMTP, and other required variables.
 
 Key environment variables:
 
@@ -169,34 +175,55 @@ Key environment variables:
 
 > Never commit `.env` files or real credentials to source control.
 
-### Run the Project Locally
+### 4. Start the backend
 
-**Start the Backend**:
+Still inside the `server` folder:
 
 ```bash
-cd server
 npm run dev
 ```
 
-**Start the Frontend**:
+You should see the backend running on:
+[http://localhost:5000](http://localhost:5000)
+
+Keep this terminal open.
+
+### 5. Open a second terminal for the frontend
+
+Open another terminal window, navigate to the project directory, and start the client:
 
 ```bash
 cd client
+npm install
 npm run dev
 ```
 
-Alternatively, you can launch both from the project root using:
+The frontend will be available at:
+[http://localhost:5173](http://localhost:5173)
+
+### 6. Open LeadFlow
+
+Open your browser and visit:
+[http://localhost:5173](http://localhost:5173)
+
+The frontend will communicate with your local backend at:
+[http://localhost:5000](http://localhost:5000) (and health diagnostics are available at [http://localhost:5000/api/health](http://localhost:5000/api/health)).
+
+### Run frontend and backend from the project root
+
+If the dependencies are already installed, you can use two terminals from the root directory:
+
+Terminal 1:
 
 ```bash
 npm run server:dev
-npm run client:dev
 ```
 
-**Local Endpoints**:
+Terminal 2:
 
-- Frontend Application: [http://localhost:5173](http://localhost:5173)
-- Backend API: [http://localhost:5000](http://localhost:5000)
-- Health Check: [http://localhost:5000/api/health](http://localhost:5000/api/health)
+```bash
+npm run client:dev
+```
 
 ## Email Verification
 
