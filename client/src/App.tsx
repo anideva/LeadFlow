@@ -17,6 +17,7 @@ interface HealthStatus {
 
 function AppContent() {
   const { user, workspace, isLoading, logout } = useAuth();
+  const firstName = user ? user.name.trim().split(/\s+/)[0] : '';
   const [activeTab, setActiveTab] = useState<'discovery' | 'crm' | 'templates' | 'campaigns' | 'workflows' | 'editor' | 'health'>('discovery');
   const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
 
@@ -249,7 +250,7 @@ function AppContent() {
               </span>
             )}
             <span style={{ color: '#4b5563', fontWeight: 500 }}>
-              👤 {user.name} ({user.email})
+              Welcome, {firstName} 👋
             </span>
           </div>
 

@@ -9,6 +9,33 @@ LeadFlow is an enterprise-ready, omnichannel lead generation, CRM, and workflow 
 
 ---
 
+## Live Demo & Deployment
+
+| Resource | Link | Description |
+| :--- | :--- | :--- |
+| **Live Application** | [https://lead-flow-nine-lyart.vercel.app](https://lead-flow-nine-lyart.vercel.app) | Production frontend hosted on Vercel |
+| **Backend API (Health Check)** | [https://leadflow-e9m2.onrender.com/api/health](https://leadflow-e9m2.onrender.com/api/health) | Live backend service with health & worker telemetry |
+| **GitHub Repository** | [https://github.com/anideva/LeadFlow](https://github.com/anideva/LeadFlow) | Monorepo source code, tests, and documentation |
+
+> [!NOTE]
+> The backend runs on Render's free tier and spins down after 15 minutes of inactivity. If visiting after a period of dormancy, the initial request may take ~30–45 seconds while the instance wakes up.
+
+---
+
+## Demo Flow (Evaluator Walkthrough)
+
+1. **Authentication**: Register or log in with secure HTTP-only cookies; session is restored automatically without client storage.
+2. **Workspace Isolation**: Multi-tenant data segregation ensuring users only access their organization's leads and assets.
+3. **Lead Discovery**: Search local businesses via Free OpenStreetMap / Overpass queries or optional Apify Google Maps integration.
+4. **Website Enrichment**: One-click public website parsing extracting contact emails, phone numbers, and official social profiles with SSRF protection.
+5. **Lead CRM**: View, filter, triage, update pipeline stages, and export leads to CSV.
+6. **Email Templates**: Create reusable email templates with validated placeholders (`{{firstName}}`, `{{companyName}}`).
+7. **Campaigns**: Batch-enroll leads into campaigns and launch asynchronous email delivery queued into BullMQ (HTTP 202).
+8. **Visual Workflows**: Drag-and-drop DAG automation canvas powered by React Flow with triggers, conditions, and actions.
+9. **System Health**: Inspect real-time operational telemetry (`GET /api/health`) reporting database, Redis, queues, and worker loop status.
+
+---
+
 ## Documentation Navigation
 - 📖 [Technical Documentation (Complete Manual)](./docs/TECHNICAL_DOCUMENTATION.md)
 - 🏗️ [System Architecture & Data Flows](./docs/ARCHITECTURE.md)
@@ -49,7 +76,7 @@ LeadFlow bridges the gap between disparate prospecting tools, CRM databases, ema
 ## 2. Key Features
 
 ### Authentication & Multi-Tenancy
-- **Secure Sessions**: Stateless JSON Web Tokens (JWT) stored in HTTP-only, `SameSite=Lax` cookies. Passwords hashed using `bcryptjs` (12 rounds).
+- **Secure Sessions**: Stateless JSON Web Tokens (JWT) stored in secure HTTP-only, `SameSite=Lax` cookies. Passwords hashed using `bcryptjs` (12 rounds). The frontend does not store the JWT in `localStorage` or `sessionStorage`, mitigating token theft via XSS.
 - **Workspace Isolation**: Every user, lead, template, campaign, and workflow belongs to a `Workspace`. Cross-tenant data leakage is strictly prevented at the database query layer.
 
 ### Lead Discovery Engine
@@ -85,8 +112,9 @@ LeadFlow bridges the gap between disparate prospecting tools, CRM databases, ema
 - **Automated Actions**: Send personalized emails via SMTP or synchronously update lead attributes in MongoDB.
 
 ### Background Queueing & Infrastructure
-- **Redis + BullMQ**: Dedicated worker processes (`workflow.worker.ts` and `campaign.worker.ts`) handling asynchronous queues.
-- **Bounded Retries**: 3 attempts with exponential backoff (`delay: 1000ms`).
+- **Redis + BullMQ**: Background queues for asynchronous workflow DAG execution (`leadflow-workflows`) and batch email campaign delivery (`leadflow-campaigns`).
+- **In-Process Worker Architecture**: In production on Render, BullMQ workers run in-process with the Express API to operate within free-tier resource limits, complete with atomic startup rollback and coordinated graceful shutdown. Standalone worker scripts (`npm run worker:workflow:dev`, `npm run worker:campaign:dev`) remain available for dedicated worker environments.
+- **Bounded Retries**: 3 attempts with exponential backoff (`delay: 2000ms`).
 - **Delivery Idempotency**: Guarantees that retried jobs never re-send duplicate emails.
 - **Resilient Startup**: Express boots cleanly even if Redis or SMTP are temporarily offline.
 
@@ -94,20 +122,37 @@ LeadFlow bridges the gap between disparate prospecting tools, CRM databases, ema
 
 ## 3. Technology Stack
 
-| Layer | Technologies | Rationale |
-| :--- | :--- | :--- |
-| **Frontend UI** | React 18, TypeScript, Vite, `@xyflow/react` | Type-safe, high-performance SPA with interactive drag-and-drop workflow canvas. |
-| **Backend API** | Node.js 20+, Express 4, TypeScript | Scalable RESTful API with strict compile-time type safety. |
-| **Database** | MongoDB 6.0+, Mongoose 8+ | Document store with multi-tenant compound indexes and soft-delete support. |
-| **Authentication** | JWT, `bcryptjs`, HTTP-Only Cookies | Stateless, secure authentication resistant to XSS and token exfiltration. |
-| **Job Queue** | Redis 6.2+, BullMQ 6+ | Production-grade distributed queueing with retry policies and job concurrency. |
-| **Email Delivery** | Nodemailer, SMTP | Abstracted provider layer (`IEmailProvider`) with strict TLS verification. |
-| **Discovery** | OpenStreetMap Nominatim, Overpass API | ₹0 cost, open-data geospatial discovery under ODbL 1.0 license. |
-| **Enrichment** | Native `fetch`, Node.js `dns` | Custom SSRF-safe HTML parser extracting public contact information. |
+| Technology | Purpose |
+| :--- | :--- |
+| **React + TypeScript** | Frontend UI and type-safe application development |
+| **Vite** | Frontend build tooling and local development proxy |
+| **Node.js + Express** | Backend REST API server and request routing |
+| **MongoDB + Mongoose** | Persistent application data (`leadflow` database) with multi-tenant scoping |
+| **Redis + BullMQ** | Background job queues and asynchronous task processing |
+| **React Flow (`@xyflow/react`)** | Visual drag-and-drop workflow automation editor |
+| **OpenStreetMap + Overpass** | Open geospatial business discovery (Nominatim + Overpass API) |
+| **Nodemailer + SMTP** | Email delivery and campaign dispatch |
+| **JWT + HTTP-Only Cookies** | Secure stateless authentication without localStorage token exposure |
+| **Vercel** | Production frontend hosting with reverse-proxy API rewrites |
+| **Render** | Production backend API and in-process background worker hosting |
+| **MongoDB Atlas** | Production cloud database cluster |
+| **Upstash Redis** | Serverless cloud Redis queue storage |
 
 ---
 
 ## 4. Architecture Diagram
+
+### System Architecture Flow
+```text
+Browser Client
+  ──► Vercel React Frontend (https://lead-flow-nine-lyart.vercel.app)
+  ──► Render Express API Server (https://leadflow-e9m2.onrender.com)
+  ──► MongoDB Atlas (`leadflow` database) & Upstash Redis
+  ──► In-Process BullMQ Background Workers (Workflow DAG & Campaign Dispatch)
+  ──► External Discovery (OSM/Overpass/Apify) / Public Website Enrichment / SMTP Relay
+```
+
+> **Worker Deployment Note**: In production on Render, BullMQ workers run in-process with the Express API service to operate efficiently within free-tier limits without requiring separate paid background worker services.
 
 ```mermaid
 graph TD
@@ -247,11 +292,12 @@ erDiagram
 
 ## 6. External Services & Cost Considerations
 
-LeadFlow V1 is deliberately architected around a **Free-First Philosophy**:
-- **Default Real Discovery**: Uses OpenStreetMap Nominatim and public Overpass API instances (100% free under ODbL 1.0).
-- **Default Contact Enrichment**: Scrapes and parses public HTML directly from target company websites (100% free; requires no external enrichment credits).
-- **Local Infrastructure**: Redis and MongoDB run locally or on free cloud tiers (MongoDB Atlas M0, Redis Cloud 30MB free tier).
+LeadFlow is designed with a **free-first development and deployment approach** using free-tier services where available:
+- **Default Real Discovery**: Uses OpenStreetMap Nominatim and public Overpass API instances (open-access under ODbL 1.0).
+- **Default Contact Enrichment**: Scrapes and parses public HTML directly from target company websites without commercial enrichment fees.
+- **Cloud Infrastructure**: Deployed on free-tier services (Vercel, Render Web Service, MongoDB Atlas M0, Upstash Redis).
 - **Email Delivery**: Uses standard SMTP. Can be tested for free using Mailtrap, Gmail SMTP, or local MailHog.
+- **Optional Apify Google Maps Integration**: Disabled by default. When enabled, protected by per-workspace daily rate limits (default: 10 runs/day) and concurrency locks to prevent unexpected credit consumption.
 
 ### Policy on Paid Third-Party Services
 LeadFlow will **never** silently integrate paid third-party services. Prior to introducing any commercial API (e.g. Apollo, ZoomInfo, Google Places, SendGrid Pro):
@@ -264,14 +310,15 @@ LeadFlow will **never** silently integrate paid third-party services. Prior to i
 
 ---
 
-## 7. Deployment Preparation
+## 7. Production Deployment
 
-### Target Infrastructure
-- **Frontend SPA**: [Vercel](https://vercel.com) or Netlify.
-- **Backend API**: [Render](https://render.com), Railway, or Node.js Docker container.
-- **Database**: [MongoDB Atlas](https://www.mongodb.com/atlas) M0 (Free Tier) or M10+.
-- **Redis**: [Redis Cloud](https://redis.com/try-free/) or Upstash Redis.
-- **Worker**: Run as a separate worker service on Render/Railway executing `npm run worker:start`.
+### Current Production Environment
+- **Frontend SPA**: Hosted on [Vercel](https://vercel.com) at [https://lead-flow-nine-lyart.vercel.app](https://lead-flow-nine-lyart.vercel.app) (with `client/vercel.json` proxying `/api/*` to Render).
+- **Backend API**: Hosted on [Render](https://render.com) at [https://leadflow-e9m2.onrender.com](https://leadflow-e9m2.onrender.com).
+- **Health Telemetry**: [https://leadflow-e9m2.onrender.com/api/health](https://leadflow-e9m2.onrender.com/api/health).
+- **Production Database**: [MongoDB Atlas](https://www.mongodb.com/atlas) cluster targeting the `leadflow` database.
+- **Queue Storage**: [Upstash Redis](https://upstash.com) serverless cloud Redis.
+- **Worker Execution**: Initialized in-process within the Render Express API service after database connection, eliminating the need for a separate paid worker dyno.
 
 ### Environment Configuration (`server/.env.example`)
 ```env
@@ -363,10 +410,13 @@ LeadFlow enforces strict test coverage with zero mocked real API charges:
 ---
 
 ## 10. Known Limitations
-1. **Static HTML Enrichment**: Website enrichment scrapes static HTML; client-rendered JavaScript SPAs without SSR will yield minimal contact information.
-2. **Contact Forms**: Businesses that omit public emails and provide only contact forms cannot have an email extracted via static scraping.
-3. **No Direct Social Platform Scraping**: LeadFlow intentionally does not scrape authenticated social media networks (LinkedIn, Instagram) directly.
-4. **Nominatim Politeness Rules**: OpenStreetMap Nominatim enforces a strict 1-second delay between queries to respect community server limits.
+1. **Render Free Tier Cold Starts**: On Render's free tier, the web service spins down after 15 minutes of zero inbound traffic. Requests after a period of dormancy experience a ~30–45 second cold-start delay while the container boots and reconnects.
+2. **External Discovery Rate Limits**: OpenStreetMap and Overpass are shared community resources governed by acceptable use policies and rate limits; queries require polite intervals.
+3. **Optional Apify Discovery**: Apify Google Maps is strictly an optional provider requiring an API token; it is not the required or default discovery mechanism.
+4. **Email Deliverability**: Outreach delivery depends on the configured external SMTP relay credentials, domain reputation, and provider-specific sending policies.
+5. **Static HTML Enrichment**: Website enrichment parses public static HTML; client-rendered JavaScript SPAs without server-side rendering yield minimal contact information.
+6. **Contact Forms**: Businesses that omit public emails and provide only web forms cannot have an email extracted via static HTML scraping.
+7. **No Direct Social Network Scraping**: LeadFlow intentionally does not scrape authenticated social media platforms (LinkedIn, Instagram) directly.
 
 ---
 
