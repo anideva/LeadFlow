@@ -9,6 +9,9 @@ export interface IUser extends Document {
   email: string;
   passwordHash: string; // Prepared for Phase 2 authentication
   role: UserRole;
+  isEmailVerified: boolean;
+  verificationToken?: string;
+  verificationTokenExpiresAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -50,6 +53,20 @@ const userSchema = new Schema<IUser>(
         message: '{VALUE} is not a supported role'
       },
       default: 'admin'
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    verificationToken: {
+      type: String,
+      sparse: true,
+      index: true
+    },
+    verificationTokenExpiresAt: {
+      type: Date,
+      default: undefined
     }
   },
   {

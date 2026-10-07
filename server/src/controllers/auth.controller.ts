@@ -14,12 +14,10 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       workspaceName
     });
 
-    // Attach JWT inside secure HTTP-only cookie
-    res.cookie(AUTH_COOKIE_NAME, result.token, getAuthCookieOptions());
-
+    // Note: Do NOT attach JWT cookie. Account requires email verification prior to login.
     res.status(201).json({
       success: true,
-      message: 'User registered and workspace created successfully.',
+      message: 'Registration successful. Please check your email to verify your account before logging in.',
       data: {
         user: result.user,
         workspace: result.workspace
@@ -121,6 +119,59 @@ export const me = async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({
       success: false,
       error: 'An unexpected error occurred fetching current user.'
+    });
+  }
+};
+
+export const verifyEmail = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { token } = req.body;
+    await AuthService.verifyEmail(token);
+
+    res.status(200).json({
+      success: true,
+      message: 'Email verified successfully. You can now log in.'
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        success: false,
+        error: error.message
+      });
+      return;
+    }
+
+    console.error('[Auth Controller - Verify Email] Unexpected error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'An unexpected error occurred during email verification.'
+    });
+  }
+};
+
+export const resendVerification = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { email } = req.body;
+    await AuthService.resendVerification(email);
+
+    // Return generic message regardless of whether user exists or was already verified to prevent enumeration
+    res.status(200).json({
+      success: true,
+      message: 'If an unverified account exists with that email address, a verification link has been sent.'
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        success: false,
+        error: error.message
+      });
+      return;
+    }
+
+    console.error('[Auth Controller - Resend Verification] Unexpected error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'An unexpected error occurred while resending verification email.'
     });
   }
 };

@@ -1,9 +1,28 @@
 import React, { useState } from 'react';
 import { Login } from './Login';
 import { Register } from './Register';
+import { VerifyEmail } from './VerifyEmail';
 
 export const AuthPage: React.FC = () => {
   const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [verifyToken, setVerifyToken] = useState<string | null>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get('token');
+    } catch {
+      return null;
+    }
+  });
+
+  const handleProceedToLogin = () => {
+    setVerifyToken(null);
+    setMode('login');
+    try {
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } catch {
+      // Ignore in non-browser environments
+    }
+  };
 
   return (
     <div
@@ -44,7 +63,9 @@ export const AuthPage: React.FC = () => {
       </div>
 
       {/* Auth Card View */}
-      {mode === 'login' ? (
+      {verifyToken ? (
+        <VerifyEmail token={verifyToken} onProceedToLogin={handleProceedToLogin} />
+      ) : mode === 'login' ? (
         <Login onSwitchToRegister={() => setMode('register')} />
       ) : (
         <Register onSwitchToLogin={() => setMode('login')} />

@@ -70,3 +70,39 @@ export const validateLoginInput = (
 
   next();
 };
+
+export const validateVerifyEmailInput = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  const { token } = req.body;
+
+  if (!token || typeof token !== 'string' || token.trim().length === 0) {
+    res.status(400).json({
+      success: false,
+      error: 'Verification token is required.'
+    });
+    return;
+  }
+
+  next();
+};
+
+export const validateResendVerificationInput = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  const { email } = req.body;
+
+  if (!email || typeof email !== 'string' || !EMAIL_REGEX.test(email.trim())) {
+    res.status(400).json({
+      success: false,
+      error: 'Please provide a valid email address.'
+    });
+    return;
+  }
+
+  next();
+};

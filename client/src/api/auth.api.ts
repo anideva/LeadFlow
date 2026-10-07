@@ -121,3 +121,45 @@ export async function logoutUser(): Promise<void> {
     throw new Error(json.error || 'Logout failed.');
   }
 }
+
+export interface GenericAuthResponse {
+  success: boolean;
+  message: string;
+  error?: string;
+}
+
+/**
+ * Verifies email using cryptographic token via POST /api/auth/verify-email.
+ */
+export async function verifyEmailToken(token: string): Promise<GenericAuthResponse> {
+  const response = await fetch('/api/auth/verify-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token: token.trim() })
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(json.error || 'Failed to verify email. The token may be invalid or expired.');
+  }
+
+  return json;
+}
+
+/**
+ * Requests a new verification email via POST /api/auth/resend-verification.
+ */
+export async function resendVerificationEmail(email: string): Promise<GenericAuthResponse> {
+  const response = await fetch('/api/auth/resend-verification', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: email.trim().toLowerCase() })
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(json.error || 'Failed to resend verification email.');
+  }
+
+  return json;
+}

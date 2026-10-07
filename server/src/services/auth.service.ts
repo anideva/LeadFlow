@@ -1,8 +1,11 @@
+import crypto from 'crypto';
 import { User, IUser } from '../models/User.model';
 import { Workspace, IWorkspace } from '../models/Workspace.model';
 import { hashPassword, comparePassword } from '../utils/password.util';
 import { signAuthToken } from '../utils/jwt.util';
 import { AppError } from '../utils/error.util';
+import { emailService } from './email';
+import { env } from '../config/env';
 
 export interface RegisterDTO {
   name: string;
@@ -22,6 +25,7 @@ export interface SafeUser {
   email: string;
   role: string;
   workspaceId: string;
+  isEmailVerified?: boolean;
   createdAt: Date;
 }
 
@@ -35,6 +39,11 @@ export interface SafeWorkspace {
   };
 }
 
+export interface RegisterResult {
+  user: SafeUser;
+  workspace: SafeWorkspace;
+}
+
 export interface AuthResult {
   token: string;
   user: SafeUser;
@@ -43,11 +52,69 @@ export interface AuthResult {
 
 export class AuthService {
   /**
-   * Registers a new user, creates their initial workspace,
-   * sets the user as workspace owner with admin role, and returns JWT.
-   * Employs safe rollback to prevent orphan records.
+   * Helper to construct and dispatch account verification email using the existing EmailService.
    */
-  public static async register(dto: RegisterDTO): Promise<AuthResult> {
+  private static async sendVerificationEmail(
+    email: string,
+    name: string,
+    token: string
+  ): Promise<void> {
+    const baseUrl = (env.CLIENT_URL || 'https://lead-flow-nine-lyart.vercel.app').replace(/\/$/, '');
+    const verificationUrl = `${baseUrl}/?token=${encodeURIComponent(token)}`;
+
+    const subject = 'Verify your LeadFlow account';
+    const textBody = `Hello ${name},
+
+Thank you for registering with LeadFlow. Please verify your email address to activate your account by clicking the link below:
+
+${verificationUrl}
+
+This verification link will expire in 24 hours.
+
+If you did not create an account on LeadFlow, you can safely ignore this email.`;
+
+    const htmlBody = `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 560px; margin: 0 auto; padding: 2rem; border: 1px solid #e5e7eb; border-radius: 8px;">
+        <h2 style="color: #1e40af; margin-top: 0;">Welcome to LeadFlow, ${name}!</h2>
+        <p style="color: #374151; font-size: 1rem; line-height: 1.5;">
+          Please verify your email address to activate your account and start discovering leads and building automated workflows.
+        </p>
+        <div style="margin: 2rem 0; text-align: center;">
+          <a href="${verificationUrl}" style="background-color: #1e40af; color: #ffffff; padding: 0.75rem 1.5rem; text-decoration: none; border-radius: 6px; font-weight: 600; display: inline-block;">
+            Verify Email Address
+          </a>
+        </div>
+        <p style="color: #6b7280; font-size: 0.875rem;">
+          Or copy and paste this link into your browser:<br />
+          <a href="${verificationUrl}" style="color: #2563eb; word-break: break-all;">${verificationUrl}</a>
+        </p>
+        <p style="color: #9ca3af; font-size: 0.8rem; margin-top: 2rem; border-top: 1px solid #f3f4f6; padding-top: 1rem;">
+          This link will expire in 24 hours. If you did not create a LeadFlow account, please disregard this message.
+        </p>
+      </div>
+    `;
+
+    try {
+      await emailService.sendEmail({
+        to: email,
+        subject,
+        text: textBody,
+        html: htmlBody
+      });
+    } catch (err: any) {
+      console.error('[AuthService] Verification email delivery failure:', err?.message || err);
+      throw new AppError(502, 'Failed to send verification email. Please try again later.');
+    }
+  }
+
+  /**
+   * Registers a new user, creates their initial workspace,
+   * generates a verification token, dispatches verification email,
+   * and sets the user as workspace owner with admin role.
+   * Employs safe rollback to prevent orphan records.
+   * Does NOT issue JWT authentication cookie.
+   */
+  public static async register(dto: RegisterDTO): Promise<RegisterResult> {
     const normalizedEmail = dto.email.trim().toLowerCase();
     const normalizedName = dto.name.trim();
     const normalizedWorkspaceName = dto.workspaceName.trim();
@@ -66,16 +133,23 @@ export class AuthService {
       name: normalizedWorkspaceName
     });
 
+    // 4. Generate cryptographically secure verification token (24-hour expiry)
+    const verificationToken = crypto.randomBytes(32).toString('hex');
+    const verificationTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
     let user: IUser;
 
-    // 4. Create User linked to the newly created workspace
+    // 5. Create User linked to the newly created workspace with isEmailVerified: false
     try {
       user = await User.create({
         workspaceId: workspace._id,
         name: normalizedName,
         email: normalizedEmail,
         passwordHash,
-        role: 'admin'
+        role: 'admin',
+        isEmailVerified: false,
+        verificationToken,
+        verificationTokenExpiresAt
       });
     } catch (userError) {
       // Rollback: delete orphan workspace if user creation fails
@@ -83,7 +157,7 @@ export class AuthService {
       throw userError;
     }
 
-    // 5. Update workspace with the created user as owner
+    // 6. Update workspace with the created user as owner
     try {
       workspace.ownerId = user._id;
       await workspace.save();
@@ -94,21 +168,24 @@ export class AuthService {
       throw workspaceUpdateError;
     }
 
-    // 6. Sign JWT
-    const token = signAuthToken({
-      userId: user._id.toString(),
-      workspaceId: workspace._id.toString(),
-      role: user.role
-    });
+    // 7. Dispatch verification email via existing email service with safe rollback
+    try {
+      await this.sendVerificationEmail(normalizedEmail, normalizedName, verificationToken);
+    } catch (emailError) {
+      // Rollback: delete both created records if email dispatch fails
+      await User.findByIdAndDelete(user._id).catch(() => {});
+      await Workspace.findByIdAndDelete(workspace._id).catch(() => {});
+      throw emailError;
+    }
 
     return {
-      token,
       user: {
         id: user._id.toString(),
         name: user.name,
         email: user.email,
         role: user.role,
         workspaceId: user.workspaceId.toString(),
+        isEmailVerified: false,
         createdAt: user.createdAt
       },
       workspace: {
@@ -123,6 +200,7 @@ export class AuthService {
   /**
    * Authenticates user credentials, generates a new JWT session,
    * and returns safe user and workspace details.
+   * Requires verified email for new accounts; grandfathers existing legacy users safely.
    */
   public static async login(dto: LoginDTO): Promise<AuthResult> {
     const normalizedEmail = dto.email.trim().toLowerCase();
@@ -140,13 +218,25 @@ export class AuthService {
       throw new AppError(401, 'Invalid email or password.');
     }
 
-    // 3. Retrieve associated workspace
+    // 3. Existing user backward compatibility:
+    // If user was created before email verification existed (lacks token and expiry),
+    // grandfather them without requiring manual DB update.
+    const isLegacyUser = !user.isEmailVerified && !user.verificationToken && !user.verificationTokenExpiresAt;
+
+    if (isLegacyUser) {
+      user.isEmailVerified = true;
+      await user.save().catch((err) => console.error('[AuthService - Legacy Upgrade] Failed to update user:', err));
+    } else if (!user.isEmailVerified) {
+      throw new AppError(403, 'Please verify your email address before logging in.');
+    }
+
+    // 4. Retrieve associated workspace
     const workspace = await Workspace.findById(user.workspaceId);
     if (!workspace) {
       throw new AppError(404, 'Associated workspace could not be found.');
     }
 
-    // 4. Sign JWT
+    // 5. Sign JWT
     const token = signAuthToken({
       userId: user._id.toString(),
       workspaceId: user.workspaceId.toString(),
@@ -161,6 +251,7 @@ export class AuthService {
         email: user.email,
         role: user.role,
         workspaceId: user.workspaceId.toString(),
+        isEmailVerified: user.isEmailVerified,
         createdAt: user.createdAt
       },
       workspace: {
@@ -170,6 +261,62 @@ export class AuthService {
         settings: workspace.settings
       }
     };
+  }
+
+  /**
+   * Validates verification token and marks user email as verified.
+   */
+  public static async verifyEmail(token: string): Promise<void> {
+    const trimmedToken = token.trim();
+    if (!trimmedToken) {
+      throw new AppError(400, 'Verification token is required.');
+    }
+
+    const user = await User.findOne({ verificationToken: trimmedToken });
+    if (!user) {
+      throw new AppError(400, 'Invalid or expired verification token.');
+    }
+
+    if (user.verificationTokenExpiresAt && user.verificationTokenExpiresAt < new Date()) {
+      throw new AppError(400, 'Verification token has expired. Please request a new verification email.');
+    }
+
+    user.isEmailVerified = true;
+    user.verificationToken = undefined;
+    user.verificationTokenExpiresAt = undefined;
+    await user.save();
+  }
+
+  /**
+   * Resends verification email with a fresh 24h token.
+   * Enforces 60-second cooldown and avoids user enumeration.
+   */
+  public static async resendVerification(email: string): Promise<void> {
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+
+    // Do not reveal whether an arbitrary email address exists
+    if (!user || user.isEmailVerified) {
+      return;
+    }
+
+    // 60-second cooldown check to prevent abuse
+    if (user.verificationTokenExpiresAt) {
+      const now = Date.now();
+      const elapsedSinceCreation = (24 * 60 * 60 * 1000) - (user.verificationTokenExpiresAt.getTime() - now);
+      if (elapsedSinceCreation < 60 * 1000) {
+        throw new AppError(429, 'Please wait at least 60 seconds before requesting another verification email.');
+      }
+    }
+
+    const newToken = crypto.randomBytes(32).toString('hex');
+    const newExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    user.verificationToken = newToken;
+    user.verificationTokenExpiresAt = newExpiresAt;
+    await user.save();
+
+    await this.sendVerificationEmail(user.email, user.name, newToken);
   }
 
   /**
@@ -193,6 +340,7 @@ export class AuthService {
         email: user.email,
         role: user.role,
         workspaceId: user.workspaceId.toString(),
+        isEmailVerified: user.isEmailVerified,
         createdAt: user.createdAt
       },
       workspace: {

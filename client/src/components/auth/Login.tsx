@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { resendVerificationEmail } from '../../api/auth.api';
 
 interface LoginProps {
   onSwitchToRegister: () => void;
@@ -11,6 +12,26 @@ export const Login: React.FC<LoginProps> = ({ onSwitchToRegister }) => {
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [resending, setResending] = useState(false);
+  const [resendStatus, setResendStatus] = useState<string | null>(null);
+
+  const handleResend = async () => {
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setLocalError('Please enter your email address to resend the verification link.');
+      return;
+    }
+    setResending(true);
+    setResendStatus(null);
+    try {
+      const res = await resendVerificationEmail(trimmedEmail);
+      setResendStatus(res.message || 'Verification email sent! Please check your inbox.');
+    } catch (err: any) {
+      setResendStatus(err.message || 'Failed to resend verification email.');
+    } finally {
+      setResending(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,14 +92,42 @@ export const Login: React.FC<LoginProps> = ({ onSwitchToRegister }) => {
               padding: '0.75rem 1rem',
               color: '#991b1b',
               fontSize: '0.85rem',
-              marginBottom: '1.25rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
+              marginBottom: '1.25rem'
             }}
           >
-            <span>⚠️</span>
-            <span>{displayedError}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <span>⚠️</span>
+              <span>{displayedError}</span>
+            </div>
+            {displayedError.toLowerCase().includes('verify your email') && (
+              <div style={{ marginTop: '0.75rem', borderTop: '1px solid #fecaca', paddingTop: '0.75rem' }}>
+                <p style={{ margin: '0 0 0.5rem 0', fontSize: '0.8rem', color: '#7f1d1d' }}>
+                  Need a new verification link?
+                </p>
+                <button
+                  type="button"
+                  onClick={handleResend}
+                  disabled={resending}
+                  style={{
+                    backgroundColor: '#1e40af',
+                    color: '#ffffff',
+                    border: 'none',
+                    borderRadius: '6px',
+                    padding: '0.4rem 0.85rem',
+                    fontSize: '0.8rem',
+                    fontWeight: 600,
+                    cursor: resending ? 'not-allowed' : 'pointer'
+                  }}
+                >
+                  {resending ? 'Sending...' : 'Resend Verification Email'}
+                </button>
+                {resendStatus && (
+                  <p style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#166534', fontWeight: 500 }}>
+                    {resendStatus}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
