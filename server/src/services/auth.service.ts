@@ -40,6 +40,7 @@ export interface SafeWorkspace {
 }
 
 export interface RegisterResult {
+  token: string;
   user: SafeUser;
   workspace: SafeWorkspace;
 }
@@ -109,10 +110,9 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
 
   /**
    * Registers a new user, creates their initial workspace,
-   * generates a verification token, dispatches verification email,
-   * and sets the user as workspace owner with admin role.
+   * sets the user as workspace owner with admin role, and returns JWT.
    * Employs safe rollback to prevent orphan records.
-   * Does NOT issue JWT authentication cookie.
+   * Email verification is temporarily disabled pending production SMTP configuration.
    */
   public static async register(dto: RegisterDTO): Promise<RegisterResult> {
     const normalizedEmail = dto.email.trim().toLowerCase();
@@ -133,13 +133,9 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
       name: normalizedWorkspaceName
     });
 
-    // 4. Generate cryptographically secure verification token (24-hour expiry)
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const verificationTokenExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
     let user: IUser;
 
-    // 5. Create User linked to the newly created workspace with isEmailVerified: false
+    // 4. Create User linked to the newly created workspace with isEmailVerified: true
     try {
       user = await User.create({
         workspaceId: workspace._id,
@@ -147,9 +143,7 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
         email: normalizedEmail,
         passwordHash,
         role: 'admin',
-        isEmailVerified: false,
-        verificationToken,
-        verificationTokenExpiresAt
+        isEmailVerified: true
       });
     } catch (userError) {
       // Rollback: delete orphan workspace if user creation fails
@@ -157,7 +151,7 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
       throw userError;
     }
 
-    // 6. Update workspace with the created user as owner
+    // 5. Update workspace with the created user as owner
     try {
       workspace.ownerId = user._id;
       await workspace.save();
@@ -168,24 +162,22 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
       throw workspaceUpdateError;
     }
 
-    // 7. Dispatch verification email via existing email service with safe rollback
-    try {
-      await this.sendVerificationEmail(normalizedEmail, normalizedName, verificationToken);
-    } catch (emailError) {
-      // Rollback: delete both created records if email dispatch fails
-      await User.findByIdAndDelete(user._id).catch(() => {});
-      await Workspace.findByIdAndDelete(workspace._id).catch(() => {});
-      throw emailError;
-    }
+    // 6. Sign JWT session token
+    const token = signAuthToken({
+      userId: user._id.toString(),
+      workspaceId: workspace._id.toString(),
+      role: user.role
+    });
 
     return {
+      token,
       user: {
         id: user._id.toString(),
         name: user.name,
         email: user.email,
         role: user.role,
         workspaceId: user.workspaceId.toString(),
-        isEmailVerified: false,
+        isEmailVerified: true,
         createdAt: user.createdAt
       },
       workspace: {
@@ -218,16 +210,12 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
       throw new AppError(401, 'Invalid email or password.');
     }
 
-    // 3. Existing user backward compatibility:
-    // If user was created before email verification existed (lacks token and expiry),
-    // grandfather them without requiring manual DB update.
-    const isLegacyUser = !user.isEmailVerified && !user.verificationToken && !user.verificationTokenExpiresAt;
-
-    if (isLegacyUser) {
+    // 3. User verification status:
+    // Email verification requirement is currently disabled pending production SMTP configuration.
+    // Ensure user has isEmailVerified: true so they can log in freely.
+    if (!user.isEmailVerified) {
       user.isEmailVerified = true;
-      await user.save().catch((err) => console.error('[AuthService - Legacy Upgrade] Failed to update user:', err));
-    } else if (!user.isEmailVerified) {
-      throw new AppError(403, 'Please verify your email address before logging in.');
+      await user.save().catch(() => {});
     }
 
     // 4. Retrieve associated workspace

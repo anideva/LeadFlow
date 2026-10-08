@@ -13,7 +13,6 @@ The health endpoint provides real-time status for the Express API, MongoDB datab
 ## Features
 
 - User registration and login with secure HTTP-only cookies
-- Email verification with expiring verification tokens and safe rollback on delivery failure
 - Workspace-based multi-tenancy and data isolation
 - Lead discovery using OpenStreetMap, Nominatim, and Overpass APIs
 - Website enrichment extracting public email addresses, phone numbers, and social links
@@ -33,7 +32,7 @@ The health endpoint provides real-time status for the Express API, MongoDB datab
 
 ## How LeadFlow Works
 
-1. **Register and Verify**: A user creates an account and verifies their email via a verification link.
+1. **Register and Access Workspace**: A user creates an account and immediately accesses their dedicated workspace where all data is segregated.
 2. **Access Workspace**: The user enters their dedicated workspace where all data is segregated.
 3. **Discover Prospects**: The user searches for local businesses or prospective companies by location and category.
 4. **Enrich Details**: Discovered prospects can be enriched by scanning their public websites for emails, phone numbers, and social profiles.
@@ -225,15 +224,6 @@ Terminal 2:
 npm run client:dev
 ```
 
-## Email Verification
-
-New user accounts require email verification before logging in:
-
-1. When a user registers, a secure 24-hour verification token is generated, and a verification link is dispatched to their email address.
-2. If the email delivery fails (for example, due to invalid or unconfigured SMTP credentials), the registration is aborted and the newly created records are rolled back to prevent orphaned accounts.
-3. Users who attempt to log in before verification receive an explicit notice with an option to resend the verification email (subject to a 60-second cooldown).
-4. Real email delivery requires valid SMTP settings in your environment configuration. For local testing without a live email server, services such as Mailtrap can be used.
-
 ## Database Design
 
 LeadFlow uses MongoDB with Mongoose schemas and compound indexes to enforce workspace-level multi-tenancy.
@@ -267,10 +257,10 @@ npm test
 npm run test:discovery          # OpenStreetMap and Overpass lead discovery tests
 npm run test:apify              # Apify provider contract and normalization tests
 npm run test:apify:usage        # Workspace daily usage limit and cost protection tests
-npm run test:auth:verification  # Email verification, tokens, and atomic rollback tests
+npm run test:auth:verification  # Authentication and retained email verification tests
 ```
 
-The current automated test suite includes 83 passing tests across all four test suites.
+The current automated test suite includes 68 passing tests across all four test suites.
 
 ## Deployment
 
@@ -287,7 +277,7 @@ The application communicates with external services including MongoDB, Redis, co
 
 - **Render Cold Starts**: On Render's free tier, the web service enters sleep mode after periods of inactivity. An initial request after dormancy may take 30–45 seconds to wake up the service.
 - **Public API Rate Limits**: OpenStreetMap, Nominatim, and Overpass are shared community services subject to public rate limits and usage policies.
-- **Email Delivery Dependencies**: Successful delivery of verification emails and campaigns depends on the configuration, deliverability, and reputation of the configured SMTP provider.
+- **Email Delivery Dependencies**: Outreach campaigns and email actions depend on the configuration, deliverability, and reputation of the configured SMTP provider.
 - **Static Website Parsing**: Website enrichment reads public static HTML. Single-page applications that rely heavily on client-side JavaScript rendering may yield limited contact information.
 - **Optional Apify Provider**: Apify Google Maps integration is optional and constrained by account balance, API tokens, and daily workspace run limits.
 
@@ -295,6 +285,7 @@ The application communicates with external services including MongoDB, Redis, co
 
 The following improvements are planned for future iterations:
 
+- Email verification: Re-enable email verification with a production SMTP/transactional email provider once the application's email infrastructure is configured.
 - Separate dedicated background worker deployments from the main API service.
 - Additional email delivery providers and delivery rate tracking.
 - Additional prospect discovery sources and providers.

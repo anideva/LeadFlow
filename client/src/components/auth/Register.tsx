@@ -15,8 +15,6 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin }) => {
   const [workspaceName, setWorkspaceName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [localError, setLocalError] = useState<string | null>(null);
-  const [isRegistered, setIsRegistered] = useState(false);
-  const [registeredEmail, setRegisteredEmail] = useState('');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,8 +50,6 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin }) => {
         password,
         workspaceName: trimmedWorkspace
       });
-      setIsRegistered(true);
-      setRegisteredEmail(trimmedEmail);
     } catch {
       // Error handled and stored in AuthContext
     } finally {
@@ -62,60 +58,6 @@ export const Register: React.FC<RegisterProps> = ({ onSwitchToLogin }) => {
   };
 
   const displayedError = localError || error;
-
-  if (isRegistered) {
-    return (
-      <div style={{ width: '100%', maxWidth: '440px', margin: '0 auto' }}>
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            borderRadius: '12px',
-            boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
-            border: '1px solid #e5e7eb',
-            padding: '2.5rem 2rem',
-            textAlign: 'center'
-          }}
-        >
-          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>✉️</div>
-          <h2 style={{ fontSize: '1.4rem', fontWeight: 800, color: '#111827', margin: '0 0 0.75rem 0' }}>
-            Check Your Email
-          </h2>
-          <p style={{ fontSize: '0.9rem', color: '#4b5563', lineHeight: 1.5, marginBottom: '1.25rem' }}>
-            Verification email sent to <strong>{registeredEmail}</strong>. Please check your inbox and click the verification link to activate your account.
-          </p>
-          <div
-            style={{
-              backgroundColor: '#f3f4f6',
-              borderRadius: '8px',
-              padding: '0.75rem 1rem',
-              color: '#6b7280',
-              fontSize: '0.8rem',
-              marginBottom: '1.75rem'
-            }}
-          >
-            ⏱️ The verification link is valid for 24 hours.
-          </div>
-          <button
-            type="button"
-            onClick={onSwitchToLogin}
-            style={{
-              width: '100%',
-              padding: '0.75rem',
-              backgroundColor: '#1e40af',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '8px',
-              fontSize: '0.9rem',
-              fontWeight: 600,
-              cursor: 'pointer'
-            }}
-          >
-            Back to Sign In
-          </button>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div style={{ width: '100%', maxWidth: '440px', margin: '0 auto' }}>

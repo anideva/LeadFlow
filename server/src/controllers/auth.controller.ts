@@ -14,10 +14,12 @@ export const register = async (req: Request, res: Response): Promise<void> => {
       workspaceName
     });
 
-    // Note: Do NOT attach JWT cookie. Account requires email verification prior to login.
+    // Attach JWT inside secure HTTP-only cookie
+    res.cookie(AUTH_COOKIE_NAME, result.token, getAuthCookieOptions());
+
     res.status(201).json({
       success: true,
-      message: 'Registration successful. Please check your email to verify your account before logging in.',
+      message: 'Registration successful.',
       data: {
         user: result.user,
         workspace: result.workspace

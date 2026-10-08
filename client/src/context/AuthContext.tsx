@@ -84,8 +84,9 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     try {
       setIsLoading(true);
       setError(null);
-      await registerUser(data);
-      // Note: User is not logged in until email verification is complete
+      const res = await registerUser(data);
+      setUser(res.data.user);
+      setWorkspace(res.data.workspace);
     } catch (err: any) {
       setError(err.message || 'Registration failed. Please try again.');
       throw err;
