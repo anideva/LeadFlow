@@ -106,3 +106,21 @@ export const validateResendVerificationInput = (
 
   next();
 };
+
+export const validateGoogleAuthInput = (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void => {
+  const { token } = req.body;
+
+  if (!token || typeof token !== 'string' || token.trim().length === 0) {
+    res.status(400).json({
+      success: false,
+      error: 'Google authentication token is required.'
+    });
+    return;
+  }
+
+  next();
+};

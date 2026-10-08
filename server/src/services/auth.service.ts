@@ -5,6 +5,7 @@ import { hashPassword, comparePassword } from '../utils/password.util';
 import { signAuthToken } from '../utils/jwt.util';
 import { AppError } from '../utils/error.util';
 import { emailService } from './email';
+import { verifySupabaseToken } from './supabase-auth.service';
 import { env } from '../config/env';
 
 export interface RegisterDTO {
@@ -204,7 +205,11 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
       throw new AppError(401, 'Invalid email or password.');
     }
 
-    // 2. Compare password against bcrypt hash
+    // 2. Check password hash presence (accounts created via Google OAuth have no password)
+    if (!user.passwordHash) {
+      throw new AppError(401, 'This account is registered with Google. Please use Google Sign-In.');
+    }
+
     const isPasswordValid = await comparePassword(dto.password, user.passwordHash);
     if (!isPasswordValid) {
       throw new AppError(401, 'Invalid email or password.');
@@ -225,6 +230,103 @@ If you did not create an account on LeadFlow, you can safely ignore this email.`
     }
 
     // 5. Sign JWT
+    const token = signAuthToken({
+      userId: user._id.toString(),
+      workspaceId: user.workspaceId.toString(),
+      role: user.role
+    });
+
+    return {
+      token,
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        workspaceId: user.workspaceId.toString(),
+        isEmailVerified: user.isEmailVerified,
+        createdAt: user.createdAt
+      },
+      workspace: {
+        id: workspace._id.toString(),
+        name: workspace.name,
+        ownerId: workspace.ownerId?.toString(),
+        settings: workspace.settings
+      }
+    };
+  }
+
+  /**
+   * Authenticates user via Google OAuth using Supabase identity verification.
+   * Verifies the Supabase access token server-side, confirms email verification,
+   * matches or links existing user or provisions new User & Workspace,
+   * and issues a standard LeadFlow JWT session.
+   */
+  public static async loginWithGoogle(supabaseToken: string): Promise<AuthResult> {
+    // 1. Verify token server-side and ensure email is verified
+    const verifiedIdentity = await verifySupabaseToken(supabaseToken);
+    const { supabaseId, email: verifiedEmail, name, avatarUrl } = verifiedIdentity;
+
+    // 2. Primary lookup: find user by Supabase ID
+    let user = await User.findOne({ supabaseId });
+
+    // 3. Secondary lookup: find user by verified email (Account Linking)
+    if (!user) {
+      user = await User.findOne({ email: verifiedEmail });
+
+      if (user) {
+        // Link existing user account safely without touching passwordHash
+        user.supabaseId = supabaseId;
+        user.isEmailVerified = true;
+        if (avatarUrl && !user.avatarUrl) {
+          user.avatarUrl = avatarUrl;
+        }
+        await user.save();
+      }
+    }
+
+    let workspace: IWorkspace | null = null;
+
+    // 4. If user does not exist, provision new Workspace and User
+    if (!user) {
+      const workspaceName = `${name}'s Workspace`;
+      workspace = await Workspace.create({ name: workspaceName });
+
+      try {
+        user = await User.create({
+          workspaceId: workspace._id,
+          name: name.trim() || 'Google User',
+          email: verifiedEmail,
+          role: 'admin',
+          isEmailVerified: true,
+          authProvider: 'google',
+          supabaseId,
+          avatarUrl
+        });
+      } catch (userCreateError) {
+        // Rollback workspace on user creation failure
+        await Workspace.findByIdAndDelete(workspace._id).catch(() => {});
+        throw userCreateError;
+      }
+
+      try {
+        workspace.ownerId = user._id;
+        await workspace.save();
+      } catch (workspaceUpdateError) {
+        // Rollback both records
+        await User.findByIdAndDelete(user._id).catch(() => {});
+        await Workspace.findByIdAndDelete(workspace._id).catch(() => {});
+        throw workspaceUpdateError;
+      }
+    } else {
+      // User exists, retrieve associated workspace
+      workspace = await Workspace.findById(user.workspaceId);
+      if (!workspace) {
+        throw new AppError(404, 'Associated workspace could not be found.');
+      }
+    }
+
+    // 5. Sign standard LeadFlow JWT session token
     const token = signAuthToken({
       userId: user._id.toString(),
       workspaceId: user.workspaceId.toString(),

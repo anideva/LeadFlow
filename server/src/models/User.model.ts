@@ -1,17 +1,21 @@
 import { Schema, model, Document, Types } from 'mongoose';
 
 export type UserRole = 'admin' | 'member';
+export type AuthProviderType = 'local' | 'google';
 
 export interface IUser extends Document {
   _id: Types.ObjectId;
   workspaceId: Types.ObjectId;
   name: string;
   email: string;
-  passwordHash: string; // Prepared for Phase 2 authentication
+  passwordHash?: string; // Optional for Google OAuth users
   role: UserRole;
   isEmailVerified: boolean;
   verificationToken?: string;
   verificationTokenExpiresAt?: Date;
+  supabaseId?: string;
+  authProvider: AuthProviderType;
+  avatarUrl?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -44,7 +48,7 @@ const userSchema = new Schema<IUser>(
     },
     passwordHash: {
       type: String,
-      required: [true, 'Password hash is required']
+      required: false
     },
     role: {
       type: String,
@@ -53,6 +57,24 @@ const userSchema = new Schema<IUser>(
         message: '{VALUE} is not a supported role'
       },
       default: 'admin'
+    },
+    authProvider: {
+      type: String,
+      enum: {
+        values: ['local', 'google'],
+        message: '{VALUE} is not a supported auth provider'
+      },
+      default: 'local'
+    },
+    supabaseId: {
+      type: String,
+      sparse: true,
+      unique: true,
+      index: true
+    },
+    avatarUrl: {
+      type: String,
+      trim: true
     },
     isEmailVerified: {
       type: Boolean,

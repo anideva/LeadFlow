@@ -7,8 +7,10 @@ import {
   loginUser,
   registerUser,
   getCurrentUser,
-  logoutUser
+  logoutUser,
+  loginWithGoogleApi
 } from '../api/auth.api';
+import { supabase } from '../lib/supabase';
 
 export interface AuthContextType {
   user: User | null;
@@ -17,6 +19,7 @@ export interface AuthContextType {
   error: string | null;
   login: (credentials: LoginCredentials) => Promise<void>;
   register: (data: RegisterData) => Promise<void>;
+  loginWithGoogle: (supabaseToken: string) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
 }
@@ -37,6 +40,38 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       try {
         setIsLoading(true);
         setError(null);
+
+        // 1. Check if returning from Supabase Google OAuth redirect
+        if (supabase) {
+          try {
+            const { data: sessionData } = await supabase.auth.getSession();
+            const supabaseToken = sessionData?.session?.access_token;
+
+            if (supabaseToken) {
+              const res = await loginWithGoogleApi(supabaseToken);
+              if (isMounted) {
+                setUser(res.data.user);
+                setWorkspace(res.data.workspace);
+              }
+
+              // Clean up OAuth fragment from browser URL
+              try {
+                if (window.location.hash || window.location.search.includes('code=')) {
+                  window.history.replaceState({}, document.title, window.location.pathname);
+                }
+                // Sign out of client-side Supabase so LeadFlow HTTP-only cookie remains the sole session
+                await supabase.auth.signOut().catch(() => {});
+              } catch {
+                // Ignore URL replace errors in test environments
+              }
+              return;
+            }
+          } catch (oauthErr: any) {
+            console.warn('[AuthContext] Google OAuth exchange notice:', oauthErr?.message || oauthErr);
+          }
+        }
+
+        // 2. Fall back to standard session check via HTTP-only cookie
         const data = await getCurrentUser();
         if (isMounted) {
           setUser(data.user);
@@ -95,6 +130,21 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const loginWithGoogle = async (supabaseToken: string): Promise<void> => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const res = await loginWithGoogleApi(supabaseToken);
+      setUser(res.data.user);
+      setWorkspace(res.data.workspace);
+    } catch (err: any) {
+      setError(err.message || 'Google authentication failed.');
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const logout = async (): Promise<void> => {
     try {
       setIsLoading(true);
@@ -120,6 +170,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         error,
         login,
         register,
+        loginWithGoogle,
         logout,
         clearError
       }}

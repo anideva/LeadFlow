@@ -12,7 +12,7 @@ The health endpoint provides real-time status for the Express API, MongoDB datab
 
 ## Features
 
-- User registration and login with secure HTTP-only cookies
+- User registration and login with secure HTTP-only cookies and optional Google Sign-In
 - Workspace-based multi-tenancy and data isolation
 - Lead discovery using OpenStreetMap, Nominatim, and Overpass APIs
 - Website enrichment extracting public email addresses, phone numbers, and social links
@@ -257,10 +257,11 @@ npm test
 npm run test:discovery          # OpenStreetMap and Overpass lead discovery tests
 npm run test:apify              # Apify provider contract and normalization tests
 npm run test:apify:usage        # Workspace daily usage limit and cost protection tests
-npm run test:auth:verification  # Authentication and retained email verification tests
+npm run test:auth:verification  # Authentication and email verification tests
+npm run test:auth:google        # Supabase Google OAuth and account linking tests
 ```
 
-The current automated test suite includes 68 passing tests across all four test suites.
+The current automated test suite includes 99 passing tests across all five test suites.
 
 ## Deployment
 

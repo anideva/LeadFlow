@@ -163,3 +163,23 @@ export async function resendVerificationEmail(email: string): Promise<GenericAut
 
   return json;
 }
+
+/**
+ * Authenticates with Google via POST /api/auth/google using a verified Supabase access token.
+ * Backend sets the secure HTTP-only 'leadflow_token' cookie.
+ */
+export async function loginWithGoogleApi(supabaseToken: string): Promise<AuthResponse> {
+  const response = await fetch('/api/auth/google', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ token: supabaseToken.trim() })
+  });
+
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(json.error || 'Google authentication failed.');
+  }
+
+  return json;
+}

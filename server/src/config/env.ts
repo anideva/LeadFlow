@@ -10,6 +10,8 @@ export interface EnvConfig {
   MONGODB_URI: string;
   JWT_SECRET: string;
   JWT_EXPIRES_IN: string;
+  SUPABASE_URL?: string;
+  SUPABASE_ANON_KEY?: string;
 }
 
 export const validateEnv = (): EnvConfig => {
@@ -55,6 +57,8 @@ export const validateEnv = (): EnvConfig => {
   const nodeEnv = (process.env.NODE_ENV as EnvConfig['NODE_ENV']) || 'development';
   const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
   const jwtExpiresIn = process.env.JWT_EXPIRES_IN || '7d';
+  const supabaseUrl = process.env.SUPABASE_URL ? process.env.SUPABASE_URL.trim() : undefined;
+  const supabaseAnonKey = process.env.SUPABASE_ANON_KEY ? process.env.SUPABASE_ANON_KEY.trim() : undefined;
 
   return {
     PORT: portVal,
@@ -62,7 +66,9 @@ export const validateEnv = (): EnvConfig => {
     CLIENT_URL: clientUrl,
     MONGODB_URI: trimmedUri,
     JWT_SECRET: jwtSecret.trim(),
-    JWT_EXPIRES_IN: jwtExpiresIn.trim()
+    JWT_EXPIRES_IN: jwtExpiresIn.trim(),
+    SUPABASE_URL: supabaseUrl,
+    SUPABASE_ANON_KEY: supabaseAnonKey
   };
 };
 

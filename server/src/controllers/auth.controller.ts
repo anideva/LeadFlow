@@ -177,3 +177,37 @@ export const resendVerification = async (req: Request, res: Response): Promise<v
     });
   }
 };
+
+export const googleAuth = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { token } = req.body;
+
+    const result = await AuthService.loginWithGoogle(token);
+
+    // Attach JWT inside secure HTTP-only cookie
+    res.cookie(AUTH_COOKIE_NAME, result.token, getAuthCookieOptions());
+
+    res.status(200).json({
+      success: true,
+      message: 'Google authentication successful.',
+      data: {
+        user: result.user,
+        workspace: result.workspace
+      }
+    });
+  } catch (error) {
+    if (error instanceof AppError) {
+      res.status(error.statusCode).json({
+        success: false,
+        error: error.message
+      });
+      return;
+    }
+
+    console.error('[Auth Controller - Google Auth] Unexpected error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'An unexpected error occurred during Google authentication.'
+    });
+  }
+};
