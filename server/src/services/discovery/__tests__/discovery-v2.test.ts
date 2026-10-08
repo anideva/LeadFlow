@@ -2,6 +2,7 @@ import assert from 'assert';
 import { OpenStreetMapOverpassProvider } from '../providers/overpass.provider';
 import { CompositeOSMDiscoveryProvider } from '../providers/composite-osm.provider';
 import { OpenStreetMapDiscoveryProvider } from '../providers/openstreetmap.provider';
+import { DiscoveryProviderFactory } from '../discovery-provider.factory';
 import { WebsiteEnrichmentProvider } from '../providers/website-enrichment.provider';
 import { IDiscoveryProvider } from '../discovery.provider';
 import { DiscoverySearchRequest, DiscoverySearchResult, DiscoveredProspect } from '../../../types/discovery.types';
@@ -467,6 +468,182 @@ async function runTests() {
       }
     }
     assert(blocked, 'Enrichment provider must block SSRF to 127.0.0.1');
+  });
+
+  // 16. Conversational query normalization in OpenStreetMapDiscoveryProvider
+  await test('16. Conversational query normalization strips prefixes without breaking normal queries', () => {
+    const osm = new OpenStreetMapDiscoveryProvider();
+    assert.strictEqual(osm.normalizeQuery('Find flower shops in Jaipur'), 'flower shops in Jaipur');
+    assert.strictEqual(osm.normalizeQuery('Search for dentists in Guwahati'), 'dentists in Guwahati');
+    assert.strictEqual(osm.normalizeQuery('Show me restaurants in Delhi'), 'restaurants in Delhi');
+    assert.strictEqual(osm.normalizeQuery('Locate book stores in Kolkata'), 'book stores in Kolkata');
+    // Normal queries remain intact
+    assert.strictEqual(osm.normalizeQuery('flower shops in Jaipur'), 'flower shops in Jaipur');
+    assert.strictEqual(osm.normalizeQuery('dentists in Guwahati'), 'dentists in Guwahati');
+    assert.strictEqual(osm.normalizeQuery('restaurants in Delhi'), 'restaurants in Delhi');
+    assert.strictEqual(osm.normalizeQuery('Jaipur'), 'Jaipur');
+  });
+
+  // 17. Overpass location extraction with conversational prefixes
+  await test('17. Overpass location extraction handles conversational prefixes', () => {
+    assert.strictEqual(overpass.extractLocation('Find flower shops in Jaipur'), 'Jaipur');
+    assert.strictEqual(overpass.extractLocation('Search for dentists in Guwahati'), 'Guwahati');
+    assert.strictEqual(overpass.extractLocation('Show me restaurants in Delhi'), 'Delhi');
+    assert.strictEqual(overpass.extractLocation('Locate book stores in Kolkata'), 'Kolkata');
+    assert.strictEqual(overpass.extractLocation('dentists in Guwahati'), 'Guwahati');
+    assert.strictEqual(overpass.extractLocation('flower shops in Jaipur'), 'Jaipur');
+  });
+
+  // 18. Overpass category resolution across conversational queries
+  await test('18. Overpass category resolution handles conversational queries and plural variations', () => {
+    const flower = overpass.resolveCategoryTags('Find flower shops in Jaipur');
+    assert(flower !== null);
+    assert.strictEqual(flower.categoryName, 'Florist');
+
+    const dentist = overpass.resolveCategoryTags('Search for dentists in Guwahati');
+    assert(dentist !== null);
+    assert.strictEqual(dentist.categoryName, 'Dentist');
+
+    const restaurant = overpass.resolveCategoryTags('Show me restaurants in Delhi');
+    assert(restaurant !== null);
+    assert.strictEqual(restaurant.categoryName, 'Restaurant');
+
+    const book = overpass.resolveCategoryTags('Locate book stores in Kolkata');
+    assert(book !== null);
+    assert.strictEqual(book.categoryName, 'Book Store');
+  });
+
+  // 19. Composite OSM search: Nominatim zero-result -> Overpass result for "Find flower shops in Jaipur"
+  await test('19. Composite OSM search: Nominatim 0-result seamlessly falls back to Overpass for "Find flower shops in Jaipur"', async () => {
+    const mockNominatim: IDiscoveryProvider = {
+      name: 'openstreetmap',
+      search: async () => ({
+        query: 'Find flower shops in Jaipur',
+        total: 0,
+        prospects: [],
+        provider: 'openstreetmap',
+        simulated: false
+      })
+    };
+
+    const mockOverpass: IDiscoveryProvider = {
+      name: 'openstreetmap_overpass',
+      search: async () => ({
+        query: 'Find flower shops in Jaipur',
+        total: 2,
+        prospects: [
+          {
+            id: 'osm_node_1001',
+            externalId: 'osm_node_1001',
+            name: 'Flora International',
+            entityType: 'business',
+            category: 'Florist',
+            location: { city: 'Jaipur', address: 'Pradhan Marg' },
+            socialProfiles: [],
+            source: 'openstreetmap_overpass',
+            sourceUrl: 'https://www.openstreetmap.org/node/1001',
+            confidenceScore: 0.95,
+            discoveryMetadata: {}
+          },
+          {
+            id: 'osm_node_1002',
+            externalId: 'osm_node_1002',
+            name: 'Shreeram Flowers',
+            entityType: 'business',
+            category: 'Florist',
+            location: { city: 'Jaipur', address: 'Hawa Sadak' },
+            website: 'https://www.jaipurfloweronline.com',
+            socialProfiles: [],
+            source: 'openstreetmap_overpass',
+            sourceUrl: 'https://www.openstreetmap.org/node/1002',
+            confidenceScore: 0.95,
+            discoveryMetadata: {}
+          }
+        ],
+        provider: 'openstreetmap_overpass',
+        simulated: false
+      })
+    };
+
+    const composite = new CompositeOSMDiscoveryProvider(
+      mockNominatim as any,
+      mockOverpass as any
+    );
+
+    const result = await composite.search({ query: 'Find flower shops in Jaipur', limit: 10 });
+    assert.strictEqual(result.total, 2, 'Should return 2 prospects from Overpass when Nominatim returns 0');
+    assert.strictEqual(result.prospects[0].name, 'Flora International');
+    assert.strictEqual(result.prospects[1].name, 'Shreeram Flowers');
+    assert.strictEqual(result.prospects[1].website, 'https://www.jaipurfloweronline.com');
+  });
+
+  // 20. Deduplication between Nominatim and Overpass
+  await test('20. Deduplication merges common entities between Nominatim and Overpass without duplicates', async () => {
+    const nomShreeram: DiscoveredProspect = {
+      id: 'osm_node_1002',
+      externalId: 'osm_node_1002',
+      name: 'Shreeram Flowers',
+      entityType: 'business',
+      category: 'Florist',
+      location: { city: 'Jaipur', address: 'Hawa Sadak, Civil Lines' },
+      socialProfiles: [],
+      source: 'openstreetmap',
+      sourceUrl: 'https://www.openstreetmap.org/node/1002',
+      confidenceScore: 0.95,
+      discoveryMetadata: {}
+    };
+
+    const overpassShreeram: DiscoveredProspect = {
+      id: 'osm_node_1002',
+      externalId: 'osm_node_1002',
+      name: 'Shreeram Flowers',
+      entityType: 'business',
+      category: 'Florist',
+      location: { city: 'Jaipur' },
+      phone: '+91 141 2220000',
+      website: 'https://www.jaipurfloweronline.com',
+      socialProfiles: [],
+      source: 'openstreetmap_overpass',
+      sourceUrl: 'https://www.openstreetmap.org/node/1002',
+      confidenceScore: 0.95,
+      discoveryMetadata: {}
+    };
+
+    const composite = new CompositeOSMDiscoveryProvider(
+      {
+        name: 'openstreetmap',
+        search: async () => ({ query: 'flowers in Jaipur', total: 1, prospects: [nomShreeram], provider: 'openstreetmap', simulated: false })
+      } as any,
+      {
+        name: 'openstreetmap_overpass',
+        search: async () => ({ query: 'flowers in Jaipur', total: 1, prospects: [overpassShreeram], provider: 'openstreetmap_overpass', simulated: false })
+      } as any
+    );
+
+    const result = await composite.search({ query: 'flowers in Jaipur', limit: 10 });
+    assert.strictEqual(result.total, 1, 'Duplicate must be deduplicated into a single prospect');
+    const prospect = result.prospects[0];
+    assert.strictEqual(prospect.name, 'Shreeram Flowers');
+    assert.strictEqual(prospect.location?.address, 'Hawa Sadak, Civil Lines', 'Preserves detailed Nominatim address');
+    assert.strictEqual(prospect.phone, '+91 141 2220000', 'Merges phone from Overpass');
+    assert.strictEqual(prospect.website, 'https://www.jaipurfloweronline.com', 'Merges website from Overpass');
+  });
+
+  // 21. DiscoveryProviderFactory routing
+  await test('21. DiscoveryProviderFactory routes "openstreetmap" and "osm" to CompositeOSMDiscoveryProvider', () => {
+    const osmProvider = DiscoveryProviderFactory.createProvider('openstreetmap');
+    assert(osmProvider instanceof CompositeOSMDiscoveryProvider, 'openstreetmap should route to CompositeOSMDiscoveryProvider');
+    assert.strictEqual(osmProvider.name, 'osm_combined');
+
+    const osmShortProvider = DiscoveryProviderFactory.createProvider('osm');
+    assert(osmShortProvider instanceof CompositeOSMDiscoveryProvider, 'osm should route to CompositeOSMDiscoveryProvider');
+
+    const combinedProvider = DiscoveryProviderFactory.createProvider('osm_combined');
+    assert(combinedProvider instanceof CompositeOSMDiscoveryProvider);
+
+    const nominatimProvider = DiscoveryProviderFactory.createProvider('nominatim');
+    assert(nominatimProvider instanceof OpenStreetMapDiscoveryProvider, 'nominatim should route to OpenStreetMapDiscoveryProvider');
+    assert.strictEqual(nominatimProvider.name, 'openstreetmap');
   });
 
   console.log(`\n=== RESULTS: ${passed}/${total} TESTS PASSED ===\n`);

@@ -73,6 +73,7 @@ export class OpenStreetMapDiscoveryProvider implements IDiscoveryProvider {
    */
   public async search(request: DiscoverySearchRequest): Promise<DiscoverySearchResult> {
     const rawQuery = request.query.trim();
+    const normalizedQuery = this.normalizeQuery(rawQuery);
     const limit = Math.min(Math.max(request.limit || 10, 1), 50);
 
     // Parse pagination cursor (format: 'offset:<number>')
@@ -84,14 +85,14 @@ export class OpenStreetMapDiscoveryProvider implements IDiscoveryProvider {
       }
     }
 
-    // Execute primary query
-    let places = await this.queryNominatim(rawQuery, limit, offset);
+    // Execute primary query with normalized search phrase
+    let places = await this.queryNominatim(normalizedQuery, limit, offset);
 
     // If zero results and query contains common filler words (e.g. "flower shops in Jaipur"),
     // attempt a secondary query with cleaned keywords (e.g. "flowers in Jaipur").
     if (places.length === 0) {
-      const simplifiedQuery = this.simplifyQuery(rawQuery);
-      if (simplifiedQuery && simplifiedQuery.toLowerCase() !== rawQuery.toLowerCase()) {
+      const simplifiedQuery = this.simplifyQuery(normalizedQuery);
+      if (simplifiedQuery && simplifiedQuery.toLowerCase() !== normalizedQuery.toLowerCase()) {
         places = await this.queryNominatim(simplifiedQuery, limit, offset);
       }
     }
@@ -169,12 +170,27 @@ export class OpenStreetMapDiscoveryProvider implements IDiscoveryProvider {
   }
 
   /**
+   * Normalizes conversational search prefixes from natural-language queries.
+   * e.g. "Find flower shops in Jaipur" -> "flower shops in Jaipur"
+   * e.g. "Search for dentists in Guwahati" -> "dentists in Guwahati"
+   * e.g. "Show me restaurants in Delhi" -> "restaurants in Delhi"
+   * e.g. "Locate book stores in Kolkata" -> "book stores in Kolkata"
+   */
+  public normalizeQuery(query: string): string {
+    const trimmed = query.trim();
+    const conversationalPrefixRegex = /^(?:please\s+)?(?:find|search\s+for|search|show\s+me|show|locate|discover|look\s+for|get|list|display)\s+(?:all\s+)?(?:the\s+)?/i;
+    const cleaned = trimmed.replace(conversationalPrefixRegex, '').trim();
+    return cleaned.length >= 2 ? cleaned : trimmed;
+  }
+
+  /**
    * Simplifies search query if Nominatim returns 0 matches for conversational phrases.
    * e.g. "flower shops in Jaipur" -> "flowers in Jaipur"
    * e.g. "software companies in Bangalore" -> "software in Bangalore"
    */
-  private simplifyQuery(q: string): string | null {
-    const cleaned = q
+  public simplifyQuery(q: string): string | null {
+    const normalized = this.normalizeQuery(q);
+    const cleaned = normalized
       .replace(/\bflower\s+shops?\b/gi, 'flowers')
       .replace(/\b(shops?|stores?|companies|company|offices?|businesses?|firm|agencies)\b/gi, '')
       .replace(/\s+/g, ' ')

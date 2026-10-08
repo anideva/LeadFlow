@@ -402,7 +402,10 @@ async function runTests() {
     assert.strictEqual(devProvider.name, 'development_sandbox');
 
     const osmProvider = DiscoveryProviderFactory.createProvider('openstreetmap');
-    assert.strictEqual(osmProvider.name, 'openstreetmap');
+    assert.strictEqual(osmProvider.name, 'osm_combined');
+
+    const nominatimProvider = DiscoveryProviderFactory.createProvider('nominatim');
+    assert.strictEqual(nominatimProvider.name, 'openstreetmap');
 
     const combinedProvider = DiscoveryProviderFactory.createProvider('osm_combined');
     assert.strictEqual(combinedProvider.name, 'osm_combined');

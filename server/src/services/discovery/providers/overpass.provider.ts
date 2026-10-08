@@ -145,12 +145,12 @@ export class OpenStreetMapOverpassProvider implements IDiscoveryProvider {
     }
 
     // Book stores
-    if (/\b(book\s*store|book\s*shop|books|stationery|bookstore)\b/.test(q)) {
+    if (/\b(book\s*stores?|book\s*shops?|books|stationery|bookstores?)\b/.test(q)) {
       return { categoryName: 'Book Store', osmTags: ['["shop"="books"]', '["shop"="stationery"]'] };
     }
 
     // Supermarkets / Groceries
-    if (/\b(supermarket|supermarkets|grocery|groceries|convenience\s*store)\b/.test(q)) {
+    if (/\b(supermarket|supermarkets|grocery|groceries|convenience\s*stores?)\b/.test(q)) {
       return {
         categoryName: 'Supermarket',
         osmTags: ['["shop"="supermarket"]', '["shop"="convenience"]']
@@ -163,25 +163,29 @@ export class OpenStreetMapOverpassProvider implements IDiscoveryProvider {
     }
 
     // Salons / Beauty / Barbers
-    if (/\b(salon|salons|barber|barbers|hairdresser|spa|beauty\s*parlour)\b/.test(q)) {
+    if (/\b(salon|salons|barber|barbers|hairdresser|hairdressers|spa|spas|beauty\s*parlou?rs?)\b/.test(q)) {
       return {
         categoryName: 'Beauty Salon / Barber',
         osmTags: ['["shop"="hairdresser"]', '["shop"="beauty"]']
       };
     }
 
-
     return null;
   }
 
   /**
    * Extracts location text from natural-language query.
+   * Handles conversational search prefixes cleanly.
+   * e.g. "Find flower shops in Jaipur" -> "Jaipur"
+   * e.g. "Search for dentists in Guwahati" -> "Guwahati"
    * e.g. "flower shops in Guwahati" -> "Guwahati"
    */
   public extractLocation(query: string): string | null {
     const trimmed = query.trim();
+    const conversationalPrefixRegex = /^(?:please\s+)?(?:find|search\s+for|search|show\s+me|show|locate|discover|look\s+for|get|list|display)\s+(?:all\s+)?(?:the\s+)?/i;
+    const cleaned = trimmed.replace(conversationalPrefixRegex, '').trim();
     const locationRegex = /\b(?:in|at|near|around|for)\s+([a-zA-Z\s,.-]+)$/i;
-    const match = trimmed.match(locationRegex);
+    const match = cleaned.match(locationRegex);
     if (match && match[1]) {
       const loc = match[1].trim().replace(/^[\s,.-]+|[\s,.-]+$/g, '');
       if (loc.length >= 2) return loc;

@@ -22,16 +22,17 @@ export class DiscoveryProviderFactory {
       case 'osm_combined':
       case 'combined':
       case 'openstreetmap_combined':
+      case 'openstreetmap':
+      case 'osm':
         return new CompositeOSMDiscoveryProvider();
 
+      case 'nominatim':
+      case 'openstreetmap_nominatim':
+        return new OpenStreetMapDiscoveryProvider();
 
       case 'overpass':
       case 'openstreetmap_overpass':
         return new OpenStreetMapOverpassProvider();
-
-      case 'openstreetmap':
-      case 'osm':
-        return new OpenStreetMapDiscoveryProvider();
 
       case 'development':
       case 'development_sandbox':
