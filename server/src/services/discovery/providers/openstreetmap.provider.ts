@@ -234,19 +234,61 @@ export class OpenStreetMapDiscoveryProvider implements IDiscoveryProvider {
       .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
       .join(' ');
 
-    // 4. Address Details
+    // 4. Address Details: prefer structured house_number + road; fall back to addr:full if unstructured; then suburb/neighbourhood
     const streetParts = [addr.house_number, addr.road].filter(Boolean);
-    const streetAddress = streetParts.length > 0 ? streetParts.join(' ') : addr.neighbourhood || addr.suburb || undefined;
+    const rawFullAddress =
+      (addr['full'] || addr['addr:full'] || tags['addr:full']) &&
+      typeof (addr['full'] || addr['addr:full'] || tags['addr:full']) === 'string' &&
+      (addr['full'] || addr['addr:full'] || tags['addr:full'])!.trim().length > 0
+        ? (addr['full'] || addr['addr:full'] || tags['addr:full'])!.trim()
+        : undefined;
+    const streetAddress =
+      streetParts.length > 0
+        ? streetParts.join(' ')
+        : rawFullAddress || addr.neighbourhood || addr.suburb || undefined;
     const city = addr.city || addr.town || addr.village || addr.municipality || addr.county || undefined;
     const state = addr.state || undefined;
     const country = addr.country || undefined;
     const postalCode = addr.postcode || undefined;
 
-    // 5. Contact Details (strictly real, never fabricated)
-    const phone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || undefined;
-    const email = tags.email || tags['contact:email'] || undefined;
-    const rawWebsite = tags.website || tags['contact:website'] || tags['url'] || undefined;
-    const website = rawWebsite && rawWebsite.startsWith('http') ? rawWebsite : rawWebsite ? `https://${rawWebsite}` : undefined;
+    // 5. Contact Details (strictly real, never fabricated, preserving precedence)
+    const rawPhone =
+      tags.phone ||
+      tags['contact:phone'] ||
+      tags['contact:mobile'] ||
+      tags.mobile ||
+      tags['phone:mobile'] ||
+      undefined;
+    const phone =
+      rawPhone && typeof rawPhone === 'string' && rawPhone.trim().length > 0 ? rawPhone.trim() : undefined;
+
+    const rawEmail = tags.email || tags['contact:email'] || undefined;
+    const email =
+      rawEmail && typeof rawEmail === 'string' && rawEmail.trim().length > 0 ? rawEmail.trim() : undefined;
+
+    const rawWebsite =
+      tags.website ||
+      tags['contact:website'] ||
+      tags['url'] ||
+      tags['contact:url'] ||
+      tags['contact:web'] ||
+      undefined;
+    const trimmedWebsite =
+      rawWebsite && typeof rawWebsite === 'string' && rawWebsite.trim().length > 0
+        ? rawWebsite.trim()
+        : undefined;
+    const website = trimmedWebsite
+      ? trimmedWebsite.startsWith('http://') || trimmedWebsite.startsWith('https://')
+        ? trimmedWebsite
+        : `https://${trimmedWebsite}`
+      : undefined;
+
+    // Handle WhatsApp separately where present; do not assume every WhatsApp tag is a standard telephone number
+    const rawWhatsapp = tags['contact:whatsapp'] || tags.whatsapp || undefined;
+    const whatsapp =
+      rawWhatsapp && typeof rawWhatsapp === 'string' && rawWhatsapp.trim().length > 0
+        ? rawWhatsapp.trim()
+        : undefined;
 
     // 6. Social Profiles (strictly real, if present in extratags)
     const socialProfiles: SocialProfile[] = [];
@@ -298,7 +340,8 @@ export class OpenStreetMapDiscoveryProvider implements IDiscoveryProvider {
         category: item.category,
         type: item.type,
         opening_hours: tags.opening_hours || undefined,
-        cuisine: tags.cuisine || undefined
+        cuisine: tags.cuisine || undefined,
+        whatsapp
       }
     };
   }

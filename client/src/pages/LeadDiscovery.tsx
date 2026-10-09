@@ -850,8 +850,8 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                         </div>
 
                         <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                          {/* Website Enrichment Button */}
-                          {prospect.website && (
+                          {/* Website Enrichment Action / Status */}
+                          {prospect.website ? (
                             <button
                               type="button"
                               onClick={() => handleEnrich(prospect)}
@@ -874,6 +874,23 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                               {prospect.isEnriched && '✨ Enriched'}
                               {!prospect.isEnriched && enrichStatus !== 'loading' && '✨ Enrich'}
                             </button>
+                          ) : (
+                            <span
+                              title="Website enrichment requires a public website URL, which is not listed in OpenStreetMap for this listing."
+                              style={{
+                                fontSize: '0.72rem',
+                                color: '#9ca3af',
+                                padding: '0.35rem 0.55rem',
+                                borderRadius: '6px',
+                                backgroundColor: '#f9fafb',
+                                border: '1px dashed #e5e7eb',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}
+                            >
+                              <span>🌐</span> No Web to Enrich
+                            </span>
                           )}
 
                           <button

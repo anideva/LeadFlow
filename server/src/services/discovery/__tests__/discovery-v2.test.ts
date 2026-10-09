@@ -646,6 +646,211 @@ async function runTests() {
     assert.strictEqual(nominatimProvider.name, 'openstreetmap');
   });
 
+  // 22. addr:full fallback and precedence in Overpass normalizer
+  await test('22. addr:full fallback in Overpass normalizer when structured address is absent', () => {
+    const elWithFull: any = {
+      type: 'node',
+      id: 7537680950,
+      tags: {
+        name: 'D & S Dental Care',
+        amenity: 'dentist',
+        'addr:full': 'Raja Complex, Beltola Tiniali, Jaya Nagar, Guwahati',
+        'addr:city': 'Guwahati'
+      }
+    };
+    const norm = (overpass as any).normalizeElement(elWithFull, 'Dentist', 'Guwahati');
+    assert(norm !== null);
+    assert.strictEqual(norm.location.address, 'Raja Complex, Beltola Tiniali, Jaya Nagar, Guwahati');
+    assert.strictEqual(norm.location.city, 'Guwahati');
+
+    // Structured address takes precedence over addr:full
+    const elStructured: any = {
+      type: 'node',
+      id: 7537680951,
+      tags: {
+        name: 'Structured Dental Care',
+        amenity: 'dentist',
+        'addr:housenumber': '10',
+        'addr:street': 'GS Road',
+        'addr:full': 'Some Unstructured String',
+        'addr:city': 'Guwahati'
+      }
+    };
+    const normStructured = (overpass as any).normalizeElement(elStructured, 'Dentist', 'Guwahati');
+    assert.strictEqual(normStructured.location.address, '10 GS Road', 'Structured house_number + street must take precedence');
+  });
+
+  // 23. addr:full in Nominatim normalizer
+  await test('23. addr:full fallback in Nominatim normalizer with structured precedence', () => {
+    const osm = new OpenStreetMapDiscoveryProvider();
+    const nomPlaceFull: any = {
+      place_id: 1,
+      osm_type: 'node',
+      osm_id: 101,
+      lat: '26.15',
+      lon: '91.75',
+      name: 'Pearl Dental Clinic',
+      display_name: 'Pearl Dental Clinic, Guwahati',
+      category: 'amenity',
+      type: 'dentist',
+      place_rank: 30,
+      address: { city: 'Guwahati' },
+      extratags: { 'addr:full': 'Upper Stand Road, Baruah Souk, Uzan Bazar, Guwahati' }
+    };
+    const norm = (osm as any).normalizePlace(nomPlaceFull);
+    assert.strictEqual(norm.location.address, 'Upper Stand Road, Baruah Souk, Uzan Bazar, Guwahati');
+
+    // Structured road + house_number takes precedence
+    const nomPlaceStructured: any = {
+      place_id: 2,
+      osm_type: 'node',
+      osm_id: 102,
+      lat: '26.15',
+      lon: '91.75',
+      name: 'Apex Clinic',
+      display_name: 'Apex Clinic, Guwahati',
+      category: 'amenity',
+      type: 'dentist',
+      place_rank: 30,
+      address: { house_number: '42', road: 'MG Road', city: 'Guwahati' },
+      extratags: { 'addr:full': 'Ignore Me' }
+    };
+    const normStructured = (osm as any).normalizePlace(nomPlaceStructured);
+    assert.strictEqual(normStructured.location.address, '42 MG Road', 'Structured house_number + road must take precedence');
+  });
+
+  // 24. Contact tag normalization for phone (contact:mobile, mobile, phone:mobile)
+  await test('24. Phone extraction supports contact:mobile and mobile with proper precedence', () => {
+    // contact:mobile
+    const elMobile: any = {
+      type: 'node',
+      id: 301,
+      tags: { name: 'Mobile Doctor', amenity: 'clinic', 'contact:mobile': '+91 9876543210' }
+    };
+    const normMobile = (overpass as any).normalizeElement(elMobile, 'Clinic', 'Guwahati');
+    assert.strictEqual(normMobile.phone, '+91 9876543210');
+
+    // mobile tag
+    const elRawMobile: any = {
+      type: 'node',
+      id: 302,
+      tags: { name: 'Raw Mobile Store', shop: 'chemist', mobile: '09928534373' }
+    };
+    const normRawMobile = (overpass as any).normalizeElement(elRawMobile, 'Chemist', 'Jaipur');
+    assert.strictEqual(normRawMobile.phone, '09928534373');
+
+    // Standard phone takes precedence over mobile
+    const elPrecedence: any = {
+      type: 'node',
+      id: 303,
+      tags: { name: 'Dual Phone Corp', amenity: 'hospital', phone: '+91 361 2221111', mobile: '+91 9876543210' }
+    };
+    const normPrecedence = (overpass as any).normalizeElement(elPrecedence, 'Hospital', 'Guwahati');
+    assert.strictEqual(normPrecedence.phone, '+91 361 2221111', 'Primary phone must take precedence over mobile');
+  });
+
+  // 25. Contact tag normalization for website (contact:website, url, contact:url, contact:web)
+  await test('25. Website extraction supports contact:url and contact:web with protocol normalization', () => {
+    // contact:url without protocol
+    const elContactUrl: any = {
+      type: 'node',
+      id: 401,
+      tags: { name: 'Dental Web', amenity: 'dentist', 'contact:url': 'dentalweb.example.com' }
+    };
+    const normContactUrl = (overpass as any).normalizeElement(elContactUrl, 'Dentist', 'Guwahati');
+    assert.strictEqual(normContactUrl.website, 'https://dentalweb.example.com');
+
+    // contact:web with protocol
+    const elContactWeb: any = {
+      type: 'node',
+      id: 402,
+      tags: { name: 'Web Care', amenity: 'clinic', 'contact:web': 'http://webcare.example.org' }
+    };
+    const normContactWeb = (overpass as any).normalizeElement(elContactWeb, 'Clinic', 'Delhi');
+    assert.strictEqual(normContactWeb.website, 'http://webcare.example.org');
+
+    // Primary website takes precedence over contact:url
+    const elWebPrecedence: any = {
+      type: 'node',
+      id: 403,
+      tags: { name: 'Prime Clinic', amenity: 'clinic', website: 'https://primeclinic.in', 'contact:url': 'https://secondary.in' }
+    };
+    const normWebPrecedence = (overpass as any).normalizeElement(elWebPrecedence, 'Clinic', 'Delhi');
+    assert.strictEqual(normWebPrecedence.website, 'https://primeclinic.in');
+  });
+
+  // 26. WhatsApp field handling
+  await test('26. WhatsApp tags are preserved in discoveryMetadata without contaminating phone', () => {
+    const elWhatsapp: any = {
+      type: 'node',
+      id: 501,
+      tags: {
+        name: 'WhatsApp Consult',
+        amenity: 'dentist',
+        'contact:whatsapp': 'https://wa.me/919999988888'
+      }
+    };
+    const norm = (overpass as any).normalizeElement(elWhatsapp, 'Dentist', 'Guwahati');
+    assert.strictEqual(norm.phone, undefined, 'WhatsApp URL must not contaminate voice phone');
+    assert.strictEqual(norm.discoveryMetadata.whatsapp, 'https://wa.me/919999988888');
+  });
+
+  // 27. Missing values do not overwrite existing valid data in composite merge
+  await test('27. Missing values in composite merge never overwrite valid existing contact fields', async () => {
+    const existingWithContacts: DiscoveredProspect = {
+      id: 'osm_node_9999',
+      externalId: 'osm_node_9999',
+      name: 'Complete Health Center',
+      entityType: 'business',
+      category: 'Hospital',
+      location: { city: 'Guwahati', address: '12 GS Road' },
+      phone: '+91 361 2233445',
+      email: 'info@healthcenter.org',
+      website: 'https://healthcenter.org',
+      socialProfiles: [{ platform: 'Facebook', url: 'https://facebook.com/healthcenter' }],
+      source: 'openstreetmap',
+      sourceUrl: 'https://www.openstreetmap.org/node/9999',
+      confidenceScore: 0.95,
+      discoveryMetadata: {}
+    };
+
+    const secondaryWithEmptyContacts: DiscoveredProspect = {
+      id: 'osm_node_9999',
+      externalId: 'osm_node_9999',
+      name: 'Complete Health Center',
+      entityType: 'business',
+      category: 'Hospital',
+      location: { city: 'Guwahati' },
+      phone: undefined,
+      email: undefined,
+      website: undefined,
+      socialProfiles: [],
+      source: 'openstreetmap_overpass',
+      sourceUrl: 'https://www.openstreetmap.org/node/9999',
+      confidenceScore: 0.95,
+      discoveryMetadata: {}
+    };
+
+    const composite = new CompositeOSMDiscoveryProvider(
+      {
+        name: 'openstreetmap',
+        search: async () => ({ query: 'health center', total: 1, prospects: [existingWithContacts], provider: 'openstreetmap', simulated: false })
+      } as any,
+      {
+        name: 'openstreetmap_overpass',
+        search: async () => ({ query: 'health center', total: 1, prospects: [secondaryWithEmptyContacts], provider: 'openstreetmap_overpass', simulated: false })
+      } as any
+    );
+
+    const result = await composite.search({ query: 'health center', limit: 10 });
+    assert.strictEqual(result.total, 1);
+    const merged = result.prospects[0];
+    assert.strictEqual(merged.phone, '+91 361 2233445');
+    assert.strictEqual(merged.email, 'info@healthcenter.org');
+    assert.strictEqual(merged.website, 'https://healthcenter.org');
+    assert.strictEqual(merged.location?.address, '12 GS Road');
+  });
+
   console.log(`\n=== RESULTS: ${passed}/${total} TESTS PASSED ===\n`);
   if (passed !== total) {
     process.exit(1);

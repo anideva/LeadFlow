@@ -419,19 +419,59 @@ out center 50;
       }
     }
 
-    // Address extraction
+    // Address extraction: prefer structured house_number + street; fall back to addr:full if unstructured; then suburb/neighbourhood
     const streetParts = [tags['addr:housenumber'], tags['addr:street']].filter(Boolean);
-    const streetAddress = streetParts.length > 0 ? streetParts.join(' ') : tags['addr:suburb'] || tags['addr:neighbourhood'] || undefined;
+    const rawFullAddress =
+      tags['addr:full'] && typeof tags['addr:full'] === 'string' && tags['addr:full'].trim().length > 0
+        ? tags['addr:full'].trim()
+        : undefined;
+    const streetAddress =
+      streetParts.length > 0
+        ? streetParts.join(' ')
+        : rawFullAddress || tags['addr:suburb'] || tags['addr:neighbourhood'] || undefined;
     const city = tags['addr:city'] || defaultCity;
     const state = tags['addr:state'] || undefined;
     const country = tags['addr:country'] || undefined;
     const postalCode = tags['addr:postcode'] || undefined;
 
-    // Real contacts from tags only (zero fabrication)
-    const phone = tags.phone || tags['contact:phone'] || tags['phone:mobile'] || undefined;
-    const email = tags.email || tags['contact:email'] || undefined;
-    const rawWebsite = tags.website || tags['contact:website'] || tags.url || undefined;
-    const website = rawWebsite && rawWebsite.startsWith('http') ? rawWebsite : rawWebsite ? `https://${rawWebsite}` : undefined;
+    // Real contacts from tags only (zero fabrication, preserving precedence)
+    const rawPhone =
+      tags.phone ||
+      tags['contact:phone'] ||
+      tags['contact:mobile'] ||
+      tags.mobile ||
+      tags['phone:mobile'] ||
+      undefined;
+    const phone =
+      rawPhone && typeof rawPhone === 'string' && rawPhone.trim().length > 0 ? rawPhone.trim() : undefined;
+
+    const rawEmail = tags.email || tags['contact:email'] || undefined;
+    const email =
+      rawEmail && typeof rawEmail === 'string' && rawEmail.trim().length > 0 ? rawEmail.trim() : undefined;
+
+    const rawWebsite =
+      tags.website ||
+      tags['contact:website'] ||
+      tags.url ||
+      tags['contact:url'] ||
+      tags['contact:web'] ||
+      undefined;
+    const trimmedWebsite =
+      rawWebsite && typeof rawWebsite === 'string' && rawWebsite.trim().length > 0
+        ? rawWebsite.trim()
+        : undefined;
+    const website = trimmedWebsite
+      ? trimmedWebsite.startsWith('http://') || trimmedWebsite.startsWith('https://')
+        ? trimmedWebsite
+        : `https://${trimmedWebsite}`
+      : undefined;
+
+    // Handle WhatsApp separately where present; do not assume every WhatsApp tag is a standard telephone number
+    const rawWhatsapp = tags['contact:whatsapp'] || tags.whatsapp || undefined;
+    const whatsapp =
+      rawWhatsapp && typeof rawWhatsapp === 'string' && rawWhatsapp.trim().length > 0
+        ? rawWhatsapp.trim()
+        : undefined;
 
     // Social profiles from tags
     const socialProfiles: SocialProfile[] = [];
@@ -476,7 +516,8 @@ out center 50;
         osm_id: osmId,
         engine: 'Overpass API',
         opening_hours: tags.opening_hours || undefined,
-        cuisine: tags.cuisine || undefined
+        cuisine: tags.cuisine || undefined,
+        whatsapp
       }
     };
   }
