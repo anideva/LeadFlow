@@ -16,9 +16,10 @@ import { exportProspectsToCsv } from '../utils/csv.util';
 const EXAMPLE_QUERIES = [
   'Find flower shops in Jaipur',
   'Find dentists in Guwahati',
-  'Find software companies in Bangalore',
-  'Find book stores in Kolkata',
-  'Find restaurants in Delhi'
+  'Find cafes in London',
+  'Find plumbers in Sydney',
+  'Find restaurants in New York',
+  'Find software companies in Berlin'
 ];
 
 type ConversionStatus = 'idle' | 'converting' | 'saved' | 'error';
@@ -740,14 +741,45 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                         )}
 
                         {/* Location */}
-                        <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <span>📍</span>
-                          <span>
-                            {[prospect.location?.address, prospect.location?.city, prospect.location?.state, prospect.location?.country]
-                              .filter(Boolean)
-                              .join(', ') || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Location details not listed</span>}
-                          </span>
-                        </div>
+                        {(() => {
+                          const mapUrl =
+                            prospect.latitude && prospect.longitude
+                              ? `https://www.google.com/maps/search/?api=1&query=${prospect.latitude},${prospect.longitude}`
+                              : prospect.location?.address
+                              ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                                  [prospect.name, prospect.location.address, prospect.location.city].filter(Boolean).join(' ')
+                                )}`
+                              : undefined;
+
+                          return (
+                            <div style={{ fontSize: '0.8rem', color: '#6b7280', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap' }}>
+                              <span>📍</span>
+                              <span>
+                                {[prospect.location?.address, prospect.location?.city, prospect.location?.state, prospect.location?.country]
+                                  .filter(Boolean)
+                                  .join(', ') || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Location details not listed</span>}
+                              </span>
+                              {mapUrl && (
+                                <a
+                                  href={mapUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    fontSize: '0.72rem',
+                                    color: '#2563eb',
+                                    textDecoration: 'none',
+                                    marginLeft: '0.25rem',
+                                    whiteSpace: 'nowrap',
+                                    fontWeight: 500
+                                  }}
+                                  title="View on Google Maps"
+                                >
+                                  Map ↗
+                                </a>
+                              )}
+                            </div>
+                          );
+                        })()}
 
                         {/* Contact Points */}
                         <div style={{ fontSize: '0.8rem', color: '#4b5563', borderTop: '1px solid #f3f4f6', paddingTop: '0.5rem', marginTop: '0.5rem' }}>
@@ -755,10 +787,20 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                             <strong>Phone:</strong>{' '}
                             {prospect.phone ? (
                               <span>
-                                {prospect.phone}
+                                <a
+                                  href={`tel:${prospect.phone.replace(/[^\d+]/g, '')}`}
+                                  style={{ color: '#111827', textDecoration: 'none', fontWeight: 500 }}
+                                >
+                                  {prospect.phone}
+                                </a>
                                 {prospect.provenance?.phone?.source === 'website' && (
                                   <span style={{ fontSize: '0.65rem', backgroundColor: '#f3e8ff', color: '#6b21a8', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
                                     via Website
+                                  </span>
+                                )}
+                                {prospect.provenance?.phone?.source === 'wikidata' && (
+                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#e0e7ff', color: '#3730a3', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                    via Wikidata
                                   </span>
                                 )}
                               </span>
@@ -766,14 +808,40 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                               <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Not available</span>
                             )}
                           </div>
+                          {prospect.discoveryMetadata?.whatsapp && (
+                            <div style={{ marginBottom: '0.25rem' }}>
+                              <strong>WhatsApp:</strong>{' '}
+                              <a
+                                href={`https://wa.me/${String(prospect.discoveryMetadata.whatsapp).replace(/[^\d]/g, '')}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{ color: '#059669', textDecoration: 'none', fontWeight: 500 }}
+                              >
+                                {String(prospect.discoveryMetadata.whatsapp)}
+                              </a>
+                              <span style={{ fontSize: '0.65rem', backgroundColor: '#ecfdf5', color: '#047857', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                WhatsApp ↗
+                              </span>
+                            </div>
+                          )}
                           <div style={{ marginBottom: '0.25rem' }}>
                             <strong>Email:</strong>{' '}
                             {prospect.email ? (
                               <span>
-                                {prospect.email}
+                                <a
+                                  href={`mailto:${prospect.email}`}
+                                  style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 500 }}
+                                >
+                                  {prospect.email}
+                                </a>
                                 {prospect.provenance?.email?.source === 'website' && (
                                   <span style={{ fontSize: '0.65rem', backgroundColor: '#f3e8ff', color: '#6b21a8', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
                                     via Website
+                                  </span>
+                                )}
+                                {prospect.provenance?.email?.source === 'wikidata' && (
+                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#e0e7ff', color: '#3730a3', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
+                                    via Wikidata
                                   </span>
                                 )}
                               </span>
@@ -788,38 +856,53 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                                 href={prospect.website}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                style={{ color: '#2563eb', textDecoration: 'none' }}
+                                style={{ color: '#2563eb', textDecoration: 'none', fontWeight: 500 }}
                               >
-                                {prospect.website.replace(/^https?:\/\//, '')}
+                                {prospect.website.replace(/^https?:\/\//, '').replace(/\/$/, '')} ↗
                               </a>
                             ) : (
                               <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Not available</span>
                             )}
                           </div>
 
-                          {/* Social Profiles extracted via website */}
+                          {/* Social Profiles */}
                           {prospect.socialProfiles && prospect.socialProfiles.length > 0 && (
                             <div style={{ marginTop: '0.35rem', display: 'flex', flexWrap: 'wrap', gap: '0.35rem', alignItems: 'center' }}>
                               <strong style={{ fontSize: '0.75rem', color: '#4b5563' }}>Social:</strong>
-                              {prospect.socialProfiles.map((sp: SocialProfile, idx: number) => (
-                                <a
-                                  key={idx}
-                                  href={sp.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  style={{
-                                    fontSize: '0.72rem',
-                                    color: '#4338ca',
-                                    backgroundColor: '#eef2ff',
-                                    padding: '0.1rem 0.4rem',
-                                    borderRadius: '4px',
-                                    textDecoration: 'none',
-                                    fontWeight: 500
-                                  }}
-                                >
-                                  {sp.platform} ↗
-                                </a>
-                              ))}
+                              {prospect.socialProfiles.map((sp: SocialProfile, idx: number) => {
+                                const platformColors: Record<string, { bg: string; text: string }> = {
+                                  linkedin: { bg: '#eff6ff', text: '#1d4ed8' },
+                                  facebook: { bg: '#eff6ff', text: '#1e40af' },
+                                  instagram: { bg: '#fdf2f8', text: '#be185d' },
+                                  twitter: { bg: '#f1f5f9', text: '#0f172a' },
+                                  youtube: { bg: '#fef2f2', text: '#b91c1c' },
+                                  github: { bg: '#f3f4f6', text: '#111827' }
+                                };
+                                const colors = platformColors[sp.platform.toLowerCase()] || { bg: '#eef2ff', text: '#4338ca' };
+                                return (
+                                  <a
+                                    key={idx}
+                                    href={sp.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    style={{
+                                      fontSize: '0.72rem',
+                                      color: colors.text,
+                                      backgroundColor: colors.bg,
+                                      border: `1px solid ${colors.text}25`,
+                                      padding: '0.1rem 0.4rem',
+                                      borderRadius: '4px',
+                                      textDecoration: 'none',
+                                      fontWeight: 600,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '0.2rem'
+                                    }}
+                                  >
+                                    {sp.platform} ↗
+                                  </a>
+                                );
+                              })}
                             </div>
                           )}
 

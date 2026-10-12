@@ -59,9 +59,18 @@ export class CompositeOSMDiscoveryProvider implements IDiscoveryProvider {
     primary: DiscoveredProspect,
     secondary: DiscoveredProspect
   ): DiscoveredProspect {
+    // Merge social profiles uniquely by URL
+    const existingSocialUrls = new Set((primary.socialProfiles || []).map((s) => s.url.toLowerCase()));
+    const mergedSocials = [...(primary.socialProfiles || [])];
+    for (const s of secondary.socialProfiles || []) {
+      if (!existingSocialUrls.has(s.url.toLowerCase())) {
+        existingSocialUrls.add(s.url.toLowerCase());
+        mergedSocials.push(s);
+      }
+    }
+
     return {
       ...primary,
-      // If primary lacks address fields but secondary has them
       location: {
         address: primary.location?.address || secondary.location?.address,
         city: primary.location?.city || secondary.location?.city,
@@ -74,13 +83,16 @@ export class CompositeOSMDiscoveryProvider implements IDiscoveryProvider {
       phone: primary.phone || secondary.phone,
       email: primary.email || secondary.email,
       website: primary.website || secondary.website,
-      socialProfiles:
-        primary.socialProfiles && primary.socialProfiles.length > 0
-          ? primary.socialProfiles
-          : secondary.socialProfiles || [],
+      socialProfiles: mergedSocials,
+      provenance: {
+        ...(secondary.provenance || {}),
+        ...(primary.provenance || {})
+      },
       discoveryMetadata: {
         ...secondary.discoveryMetadata,
         ...primary.discoveryMetadata,
+        whatsapp: primary.discoveryMetadata?.whatsapp || secondary.discoveryMetadata?.whatsapp,
+        wikidata: primary.discoveryMetadata?.wikidata || secondary.discoveryMetadata?.wikidata,
         combinedEngines: ['Nominatim', 'Overpass API']
       }
     };

@@ -14,6 +14,7 @@ import { LeadService, CreateLeadDTO } from '../lead.service';
 import { Lead, ILead } from '../../models/Lead.model';
 import { AppError } from '../../utils/error.util';
 import { WorkspaceUsageService } from './workspace-usage.service';
+import { WikidataEnrichmentProvider } from './providers/wikidata.provider';
 
 export class DiscoveryService {
   private static providerInstance: IDiscoveryProvider = DiscoveryProviderFactory.createProvider();
@@ -135,6 +136,66 @@ export class DiscoveryService {
         source: 'website',
         extractedAt: new Date().toISOString()
       };
+    }
+
+    // Apply enriched address if prospect lacks street address
+    if (enrichment.address && (!enriched.location?.address || enriched.location.address.trim().length === 0)) {
+      enriched.location = enriched.location || {};
+      enriched.location.address = enrichment.address;
+      enriched.provenance.address = {
+        value: enrichment.address,
+        source: 'website',
+        extractedAt: new Date().toISOString()
+      };
+    }
+
+    // Apply clean business name if existing name is generic
+    if (enrichment.businessName && (!enriched.name || enriched.name.toLowerCase() === 'local business')) {
+      enriched.name = enrichment.businessName;
+      enriched.provenance.name = {
+        value: enrichment.businessName,
+        source: 'website',
+        extractedAt: new Date().toISOString()
+      };
+    }
+
+    // Supplementary enrichment via CC0 Wikidata if entity has a wikidata tag
+    if (prospect.discoveryMetadata?.wikidata) {
+      try {
+        const wikidataProvider = new WikidataEnrichmentProvider();
+        const wikiResult = await wikidataProvider.enrichByWikidataId(prospect.discoveryMetadata.wikidata);
+        if (wikiResult) {
+          if (!enriched.phone && wikiResult.phone) {
+            enriched.phone = wikiResult.phone;
+            enriched.provenance.phone = {
+              value: wikiResult.phone,
+              source: 'wikidata',
+              extractedAt: new Date().toISOString()
+            };
+          }
+          if (!enriched.email && wikiResult.email) {
+            enriched.email = wikiResult.email;
+            enriched.provenance.email = {
+              value: wikiResult.email,
+              source: 'wikidata',
+              extractedAt: new Date().toISOString()
+            };
+          }
+          if (wikiResult.socialProfiles && wikiResult.socialProfiles.length > 0) {
+            const existingUrls = new Set((enriched.socialProfiles || []).map((s) => s.url.toLowerCase()));
+            const currentSocials = [...(enriched.socialProfiles || [])];
+            for (const sp of wikiResult.socialProfiles) {
+              if (!existingUrls.has(sp.url.toLowerCase())) {
+                existingUrls.add(sp.url.toLowerCase());
+                currentSocials.push(sp);
+              }
+            }
+            enriched.socialProfiles = currentSocials;
+          }
+        }
+      } catch {
+        // Non-blocking supplementary enrichment
+      }
     }
 
     enriched.isEnriched = true;

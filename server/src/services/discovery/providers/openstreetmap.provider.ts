@@ -190,11 +190,41 @@ export class OpenStreetMapDiscoveryProvider implements IDiscoveryProvider {
    */
   public simplifyQuery(q: string): string | null {
     const normalized = this.normalizeQuery(q);
-    const cleaned = normalized
-      .replace(/\bflower\s+shops?\b/gi, 'flowers')
+
+    // 1. Detect prefix location format (e.g. "London cafes" -> "cafes in London")
+    const categorySuffixRegex = /\s+(?:all\s+)?(restaurants?|cafes?|coffee\s*shops?|dentists?|doctors?|clinics?|hospitals?|florists?|flowers?|flower\s+shops?|bakeries?|bakery|hotels?|lawyers?|law\s*firms?|attorneys?|software(?:\s+companies)?|plumbers?|electricians?|mechanics?|auto\s*repair|locksmiths?|gyms?|fitness|salons?|barbers?|spas?|pharmacies?|chemists?|supermarkets?|groceries?|grocery\s*stores?|book\s*stores?|book\s*shops?|schools?|colleges?|contractors?|accountants?|accounting\s+firms?|real\s+estate(?:\s+agents)?|cleaning(?:\s+services)?)$/i;
+    let inverted = normalized;
+    if (!/\b(?:in|at|near|around|for)\s+/i.test(normalized) && categorySuffixRegex.test(normalized)) {
+      const match = normalized.match(categorySuffixRegex);
+      if (match && match[1]) {
+        const cat = match[1];
+        const loc = normalized.replace(categorySuffixRegex, '').trim();
+        if (loc.length >= 2) {
+          inverted = `${cat} in ${loc}`;
+        }
+      }
+    }
+
+    // 2. Align colloquial commercial terms with Nominatim/OSM special phrases
+    const cleaned = inverted
+      .replace(/\bflower\s+shops?\b/gi, 'florist')
+      .replace(/\bflowers\b/gi, 'florist')
+      .replace(/\bdentists\b/gi, 'dentist')
+      .replace(/\blaw\s+firms?\b/gi, 'lawyer')
+      .replace(/\battorneys?\b/gi, 'lawyer')
+      .replace(/\bbook\s+stores?\b/gi, 'books')
+      .replace(/\bbook\s+shops?\b/gi, 'books')
+      .replace(/\bbakeries\b/gi, 'bakery')
+      .replace(/\brestaurants\b/gi, 'restaurant')
+      .replace(/\bcafes\b/gi, 'cafe')
+      .replace(/\bpharmacies\b/gi, 'pharmacy')
+      .replace(/\bplumbers\b/gi, 'plumber')
+      .replace(/\belectricians\b/gi, 'electrician')
+      .replace(/\bhotels\b/gi, 'hotel')
       .replace(/\b(shops?|stores?|companies|company|offices?|businesses?|firm|agencies)\b/gi, '')
       .replace(/\s+/g, ' ')
       .trim();
+
     return cleaned.length >= 3 ? cleaned : null;
   }
 
@@ -341,7 +371,8 @@ export class OpenStreetMapDiscoveryProvider implements IDiscoveryProvider {
         type: item.type,
         opening_hours: tags.opening_hours || undefined,
         cuisine: tags.cuisine || undefined,
-        whatsapp
+        whatsapp,
+        wikidata: tags.wikidata || undefined
       }
     };
   }

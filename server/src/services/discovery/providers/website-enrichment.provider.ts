@@ -59,16 +59,21 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
     let businessName: string | undefined = undefined;
     let overview: string | undefined = undefined;
 
+    const structuredInfo: { businessName?: string; address?: string; overview?: string } = {};
+
     // 3. Fetch primary homepage
     pagesScanned.push(normalizedUrl);
     const homepageHtml = await this.safeFetchHtml(normalizedUrl, options?.timeoutMs || 7000);
 
     if (homepageHtml) {
-      // Extract metadata from homepage
-      businessName = this.extractTitle(homepageHtml);
-      overview = this.extractDescription(homepageHtml);
+      // Extract structured Schema.org JSON-LD data
+      this.extractJsonLd(homepageHtml, emailsSet, phonesSet, socialMap, structuredInfo);
 
-      // Extract contacts from homepage
+      // Extract metadata from homepage (preferring structured info if present)
+      businessName = structuredInfo.businessName || this.extractTitle(homepageHtml);
+      overview = structuredInfo.overview || this.extractDescription(homepageHtml);
+
+      // Extract contacts from homepage text and anchors
       this.extractEmails(homepageHtml, emailsSet);
       this.extractPhones(homepageHtml, phonesSet);
       this.extractSocials(homepageHtml, socialMap);
@@ -82,6 +87,7 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
           pagesScanned.push(contactPageUrl);
           const contactPageHtml = await this.safeFetchHtml(contactPageUrl, options?.timeoutMs || 7000);
           if (contactPageHtml) {
+            this.extractJsonLd(contactPageHtml, emailsSet, phonesSet, socialMap, structuredInfo);
             this.extractEmails(contactPageHtml, emailsSet);
             this.extractPhones(contactPageHtml, phonesSet);
             this.extractSocials(contactPageHtml, socialMap);
@@ -93,7 +99,19 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
     }
 
     const emails = Array.from(emailsSet);
-    const phones = Array.from(phonesSet);
+
+    // Canonical Phone Normalization & Deduplication (e.g. (519) 645-3002 vs 519-645-3002)
+    const normalizedPhones: string[] = [];
+    const seenDigitSignatures = new Set<string>();
+    for (const p of phonesSet) {
+      const digits = p.replace(/\D/g, '');
+      const sig = digits.length >= 10 ? digits.slice(-10) : digits;
+      if (!seenDigitSignatures.has(sig)) {
+        seenDigitSignatures.add(sig);
+        normalizedPhones.push(p);
+      }
+    }
+
     const socialProfiles = Array.from(socialMap.values());
     const contactPages = Array.from(contactPagesSet);
 
@@ -101,17 +119,19 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
     const provenance: Record<string, string> = {};
     if (businessName) provenance.businessName = 'website';
     if (emails.length > 0) provenance.email = 'website';
-    if (phones.length > 0) provenance.phone = 'website';
+    if (normalizedPhones.length > 0) provenance.phone = 'website';
     if (socialProfiles.length > 0) provenance.socialProfiles = 'website';
     if (overview) provenance.overview = 'website';
+    if (structuredInfo.address) provenance.address = 'website';
 
     const result: ProspectEnrichmentResult = {
       businessName,
       emails,
-      phones,
+      phones: normalizedPhones,
       website: normalizedUrl,
       contactPages,
       socialProfiles,
+      address: structuredInfo.address,
       overview,
       provenance,
       metadata: {
@@ -444,11 +464,22 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
   }
 
   /**
-   * Extracts official social media profile links from anchor tags.
+   * Adds a candidate social profile URL to socialMap if it matches a supported platform.
    */
-  public extractSocials(html: string, socialMap: Map<string, SocialProfile>): void {
-    const anchorHrefRegex = /href=["'](https?:\/\/[^"'\s>]+)["']/gi;
-    let match: RegExpExecArray | null;
+  public addSocialProfileIfSupported(url: string, socialMap: Map<string, SocialProfile>): void {
+    if (!url || typeof url !== 'string') return;
+    const cleanCandidate = url.trim();
+
+    // Disqualify share intents
+    if (
+      cleanCandidate.includes('/sharer') ||
+      cleanCandidate.includes('/intent') ||
+      cleanCandidate.includes('/share') ||
+      cleanCandidate.includes('shareArticle') ||
+      cleanCandidate.includes('hashtag')
+    ) {
+      return;
+    }
 
     const supportedPlatforms: { platform: string; matchRegex: RegExp }[] = [
       { platform: 'LinkedIn', matchRegex: /linkedin\.com\/(?:company|in)\/([a-zA-Z0-9_-]+)/i },
@@ -460,37 +491,148 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
       { platform: 'GitHub', matchRegex: /github\.com\/([a-zA-Z0-9_-]+)/i }
     ];
 
-    while ((match = anchorHrefRegex.exec(html)) !== null) {
-      const url = match[1];
-
-      // Disqualify share intents
-      if (
-        url.includes('/sharer') ||
-        url.includes('/intent') ||
-        url.includes('/share') ||
-        url.includes('shareArticle') ||
-        url.includes('hashtag')
-      ) {
-        continue;
-      }
-
-      for (const item of supportedPlatforms) {
-        if (item.matchRegex.test(url)) {
-          // Normalize URL: clean query string and trailing slashes
-          try {
-            const parsed = new URL(url);
-            parsed.search = '';
-            parsed.hash = '';
-            const cleanUrl = parsed.toString().replace(/\/$/, '');
-            const key = `${item.platform}:${cleanUrl.toLowerCase()}`;
-            if (!socialMap.has(key)) {
-              socialMap.set(key, { platform: item.platform, url: cleanUrl });
-            }
-          } catch {
-            // Ignore malformed URL
+    for (const item of supportedPlatforms) {
+      if (item.matchRegex.test(cleanCandidate)) {
+        try {
+          const parsed = new URL(
+            cleanCandidate.startsWith('http://') || cleanCandidate.startsWith('https://')
+              ? cleanCandidate
+              : `https://${cleanCandidate}`
+          );
+          parsed.search = '';
+          parsed.hash = '';
+          const cleanUrl = parsed.toString().replace(/\/$/, '');
+          const key = `${item.platform}:${cleanUrl.toLowerCase()}`;
+          if (!socialMap.has(key)) {
+            socialMap.set(key, { platform: item.platform, url: cleanUrl });
           }
-          break;
+        } catch {
+          // Ignore malformed URL
         }
+        break;
+      }
+    }
+  }
+
+  /**
+   * Extracts official social media profile links from anchor tags.
+   */
+  public extractSocials(html: string, socialMap: Map<string, SocialProfile>): void {
+    const anchorHrefRegex = /href=["'](https?:\/\/[^"'\s>]+)["']/gi;
+    let match: RegExpExecArray | null;
+
+    while ((match = anchorHrefRegex.exec(html)) !== null) {
+      this.addSocialProfileIfSupported(match[1], socialMap);
+    }
+  }
+
+  /**
+   * Extracts structured data from Schema.org JSON-LD scripts (<script type="application/ld+json">).
+   */
+  public extractJsonLd(
+    html: string,
+    emailSet: Set<string>,
+    phoneSet: Set<string>,
+    socialMap: Map<string, SocialProfile>,
+    extractedInfo: { businessName?: string; address?: string; overview?: string }
+  ): void {
+    const jsonLdRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+    let match: RegExpExecArray | null;
+
+    while ((match = jsonLdRegex.exec(html)) !== null) {
+      try {
+        const jsonText = match[1].trim();
+        if (!jsonText) continue;
+        const parsed = JSON.parse(jsonText);
+        this.processJsonLdNode(parsed, emailSet, phoneSet, socialMap, extractedInfo);
+      } catch {
+        // Ignore malformed JSON-LD scripts
+      }
+    }
+  }
+
+  private processJsonLdNode(
+    node: any,
+    emailSet: Set<string>,
+    phoneSet: Set<string>,
+    socialMap: Map<string, SocialProfile>,
+    extractedInfo: { businessName?: string; address?: string; overview?: string }
+  ): void {
+    if (!node || typeof node !== 'object') return;
+
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        this.processJsonLdNode(item, emailSet, phoneSet, socialMap, extractedInfo);
+      }
+      return;
+    }
+
+    if (Array.isArray(node['@graph'])) {
+      for (const item of node['@graph']) {
+        this.processJsonLdNode(item, emailSet, phoneSet, socialMap, extractedInfo);
+      }
+    }
+
+    // Name / legalName
+    if (!extractedInfo.businessName && (node.name || node.legalName)) {
+      const rawName = String(node.name || node.legalName).trim();
+      if (rawName && rawName.length <= 100) {
+        extractedInfo.businessName = rawName;
+      }
+    }
+
+    // Description
+    if (!extractedInfo.overview && node.description && typeof node.description === 'string') {
+      const desc = node.description.trim();
+      if (desc.length >= 10 && desc.length <= 500) {
+        extractedInfo.overview = desc;
+      }
+    }
+
+    // Telephone
+    const telephones = Array.isArray(node.telephone) ? node.telephone : [node.telephone];
+    for (const rawTel of telephones) {
+      if (rawTel && typeof rawTel === 'string') {
+        const phone = this.sanitizePhone(rawTel);
+        if (phone) phoneSet.add(phone);
+      }
+    }
+
+    // Email
+    const emails = Array.isArray(node.email) ? node.email : [node.email];
+    for (const rawEmail of emails) {
+      if (rawEmail && typeof rawEmail === 'string') {
+        const email = this.sanitizeEmail(rawEmail);
+        if (email) emailSet.add(email);
+      }
+    }
+
+    // PostalAddress
+    if (!extractedInfo.address && node.address) {
+      const addr = node.address;
+      if (typeof addr === 'string' && addr.trim().length > 0) {
+        extractedInfo.address = addr.trim();
+      } else if (typeof addr === 'object') {
+        const parts = [
+          addr.streetAddress,
+          addr.addressLocality,
+          addr.addressRegion,
+          addr.postalCode,
+          addr.addressCountry
+        ]
+          .filter((p) => p && typeof p === 'string' && p.trim().length > 0)
+          .map((p) => String(p).trim());
+        if (parts.length > 0) {
+          extractedInfo.address = parts.join(', ');
+        }
+      }
+    }
+
+    // sameAs (Social profiles)
+    const sameAsList = Array.isArray(node.sameAs) ? node.sameAs : node.sameAs ? [node.sameAs] : [];
+    for (const rawUrl of sameAsList) {
+      if (typeof rawUrl === 'string') {
+        this.addSocialProfileIfSupported(rawUrl, socialMap);
       }
     }
   }

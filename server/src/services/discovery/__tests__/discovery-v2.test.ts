@@ -1,9 +1,10 @@
 import assert from 'assert';
-import { OpenStreetMapOverpassProvider } from '../providers/overpass.provider';
+import { OpenStreetMapOverpassProvider, DEFAULT_OVERPASS_MIRRORS } from '../providers/overpass.provider';
 import { CompositeOSMDiscoveryProvider } from '../providers/composite-osm.provider';
 import { OpenStreetMapDiscoveryProvider } from '../providers/openstreetmap.provider';
 import { DiscoveryProviderFactory } from '../discovery-provider.factory';
 import { WebsiteEnrichmentProvider } from '../providers/website-enrichment.provider';
+import { WikidataEnrichmentProvider } from '../providers/wikidata.provider';
 import { IDiscoveryProvider } from '../discovery.provider';
 import { DiscoverySearchRequest, DiscoverySearchResult, DiscoveredProspect } from '../../../types/discovery.types';
 
@@ -849,6 +850,209 @@ async function runTests() {
     assert.strictEqual(merged.email, 'info@healthcenter.org');
     assert.strictEqual(merged.website, 'https://healthcenter.org');
     assert.strictEqual(merged.location?.address, '12 GS Road');
+  });
+
+  // 28. Prefix location extraction (e.g. "London cafes", "New York dentists")
+  await test('28. Prefix location extraction supports global prefix queries', () => {
+    assert.strictEqual(overpass.extractLocation('London cafes'), 'London');
+    assert.strictEqual(overpass.extractLocation('New York dentists'), 'New York');
+    assert.strictEqual(overpass.extractLocation('Jaipur flower shops'), 'Jaipur');
+    assert.strictEqual(overpass.extractLocation('Sydney plumbers'), 'Sydney');
+    assert.strictEqual(overpass.extractLocation('Berlin software companies'), 'Berlin');
+    assert.strictEqual(overpass.extractLocation('Paris restaurants'), 'Paris');
+    // Suffix format continues to work
+    assert.strictEqual(overpass.extractLocation('cafes in London'), 'London');
+    assert.strictEqual(overpass.extractLocation('plumbers near Sydney'), 'Sydney');
+  });
+
+  // 29. Expanded commercial category mapping
+  await test('29. Expanded commercial category mapping supports trades, professional services & retail', () => {
+    const testCases: [string, string][] = [
+      ['Sydney plumbers', 'Plumber'],
+      ['emergency electricians in Austin', 'Electrician'],
+      ['best accountants in Toronto', 'Accountant / Tax'],
+      ['auto repair in Chicago', 'Auto Repair / Mechanic'],
+      ['locksmiths in Boston', 'Locksmith'],
+      ['digital marketing agency in Dublin', 'Advertising / Marketing'],
+      ['veterinarian near Dallas', 'Veterinarian'],
+      ['hair salon in Miami', 'Beauty Salon / Barber'],
+      ['architecture firm in Singapore', 'Architect / Interior Design'],
+      ['cleaning services in Seattle', 'Cleaning']
+    ];
+    for (const [query, expectedCategory] of testCases) {
+      const res = overpass.resolveCategoryTags(query);
+      assert(res !== null, `Expected mapping for "${query}"`);
+      assert.strictEqual(res.categoryName, expectedCategory, `Category mismatch for "${query}"`);
+    }
+  });
+
+  // 30. Nominatim simplifyQuery prefix inversion and synonyms
+  await test('30. Nominatim query simplification handles prefix inversion and special phrase synonyms', () => {
+    const nominatim = new OpenStreetMapDiscoveryProvider();
+
+    // Prefix inversion: "London cafes" -> "cafe in London"
+    const simplifiedLondon = nominatim.simplifyQuery('London cafes');
+    assert(simplifiedLondon !== null);
+    assert(simplifiedLondon.includes('in London'), `Expected "in London" in "${simplifiedLondon}"`);
+    assert(simplifiedLondon.includes('cafe'), `Expected "cafe" in "${simplifiedLondon}"`);
+
+    // Special phrase synonyms: "flower shops in Jaipur" -> "florist in Jaipur"
+    const simplifiedJaipur = nominatim.simplifyQuery('flower shops in Jaipur');
+    assert(simplifiedJaipur !== null);
+    assert(simplifiedJaipur.includes('florist'), `Expected "florist" in "${simplifiedJaipur}"`);
+    assert(simplifiedJaipur.includes('in Jaipur'), `Expected "in Jaipur" in "${simplifiedJaipur}"`);
+
+    // "dentists in Guwahati" -> "dentist in Guwahati"
+    const simplifiedGuwahati = nominatim.simplifyQuery('dentists in Guwahati');
+    assert(simplifiedGuwahati !== null);
+    assert(simplifiedGuwahati.includes('dentist'), `Expected "dentist" in "${simplifiedGuwahati}"`);
+  });
+
+  // 31. Schema.org JSON-LD structured data extraction in WebsiteEnrichmentProvider
+  await test('31. Schema.org JSON-LD extraction parses business telephone, email, address, name and social profiles', () => {
+    const enricher = new WebsiteEnrichmentProvider();
+    const emailsSet = new Set<string>();
+    const phonesSet = new Set<string>();
+    const socialMap = new Map<string, any>();
+    const extractedInfo: { businessName?: string; address?: string; overview?: string } = {};
+
+    const mockHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <script type="application/ld+json">
+        {
+          "@context": "https://schema.org",
+          "@type": "LocalBusiness",
+          "name": "Acme Dental Care",
+          "telephone": "+1-555-019-2834",
+          "email": "contact@acmedental.example.com",
+          "address": {
+            "@type": "PostalAddress",
+            "streetAddress": "123 Main St",
+            "addressLocality": "London",
+            "postalCode": "W1A 1AA",
+            "addressCountry": "UK"
+          },
+          "description": "Leading dental practice in central London providing family and cosmetic dentistry.",
+          "sameAs": [
+            "https://www.linkedin.com/company/acmedental",
+            "https://www.facebook.com/acmedentalcare",
+            "https://twitter.com/acmedental"
+          ]
+        }
+        </script>
+      </head>
+      <body>
+        <h1>Welcome</h1>
+      </body>
+      </html>
+    `;
+
+    enricher.extractJsonLd(mockHtml, emailsSet, phonesSet, socialMap, extractedInfo);
+
+    assert.strictEqual(extractedInfo.businessName, 'Acme Dental Care');
+    assert.strictEqual(extractedInfo.address, '123 Main St, London, W1A 1AA, UK');
+    assert(extractedInfo.overview?.includes('Leading dental practice'));
+    assert(emailsSet.has('contact@acmedental.example.com'));
+    assert(phonesSet.has('+1-555-019-2834'));
+    assert(socialMap.has('LinkedIn:https://www.linkedin.com/company/acmedental'));
+    assert(socialMap.has('Facebook:https://www.facebook.com/acmedentalcare'));
+    assert(socialMap.has('Twitter:https://twitter.com/acmedental'));
+  });
+
+  // 32. Canonical phone deduplication eliminates formatting variations
+  await test('32. Canonical phone deduplication eliminates duplicate numbers across different formatting', () => {
+    const rawPhones = [
+      '(519) 645-3002',
+      '519-645-3002',
+      '5196453002',
+      '+1 519 645 3002',
+      '+44 20 7946 0991'
+    ];
+
+    const normalizedPhones: string[] = [];
+    const seenDigitSignatures = new Set<string>();
+    for (const p of rawPhones) {
+      const digits = p.replace(/\D/g, '');
+      const sig = digits.length >= 10 ? digits.slice(-10) : digits;
+      if (!seenDigitSignatures.has(sig)) {
+        seenDigitSignatures.add(sig);
+        normalizedPhones.push(p);
+      }
+    }
+
+    // Out of 4 variants of the 519 number and 1 UK number, exactly 2 canonical numbers remain
+    assert.strictEqual(normalizedPhones.length, 2);
+    assert.strictEqual(normalizedPhones[0], '(519) 645-3002');
+    assert.strictEqual(normalizedPhones[1], '+44 20 7946 0991');
+  });
+
+  // 33. Overpass sequential mirror configuration
+  await test('33. Overpass provider configures public mirrors for sequential failover', () => {
+    assert(Array.isArray(DEFAULT_OVERPASS_MIRRORS));
+    assert(DEFAULT_OVERPASS_MIRRORS.length >= 2, 'Must configure at least 2 public Overpass mirrors');
+    assert(DEFAULT_OVERPASS_MIRRORS.includes('https://overpass-api.de/api/interpreter'));
+    assert(DEFAULT_OVERPASS_MIRRORS.includes('https://overpass.kumi.systems/api/interpreter'));
+
+    const providerWithDefault = new OpenStreetMapOverpassProvider();
+    assert.strictEqual(providerWithDefault.baseUrl, DEFAULT_OVERPASS_MIRRORS[0]);
+
+    // Custom baseUrl takes precedence while keeping fallback mirrors
+    const customProvider = new OpenStreetMapOverpassProvider('https://custom-overpass.org/api');
+    assert.strictEqual(customProvider.baseUrl, 'https://custom-overpass.org/api');
+  });
+
+  // 34. Social profile merge in CompositeOSMDiscoveryProvider
+  await test('34. Composite provider merges unique social profiles across providers without duplication', async () => {
+    const osmProspect: DiscoveredProspect = {
+      id: 'osm_1',
+      name: 'Alpha Dental',
+      entityType: 'business',
+      category: 'Dentist',
+      location: { city: 'London' },
+      socialProfiles: [
+        { platform: 'LinkedIn', url: 'https://linkedin.com/company/alphadental' }
+      ],
+      source: 'openstreetmap',
+      discoveryMetadata: { wikidata: 'Q12345' }
+    };
+
+    const overpassProspect: DiscoveredProspect = {
+      id: 'osm_1',
+      name: 'Alpha Dental',
+      entityType: 'business',
+      category: 'Dentist',
+      location: { city: 'London' },
+      socialProfiles: [
+        { platform: 'LinkedIn', url: 'https://linkedin.com/company/alphadental' }, // duplicate URL
+        { platform: 'Instagram', url: 'https://instagram.com/alphadental' }        // new URL
+      ],
+      source: 'openstreetmap_overpass',
+      discoveryMetadata: { whatsapp: '+447000111222' }
+    };
+
+    const composite = new CompositeOSMDiscoveryProvider(
+      { name: 'openstreetmap', search: async () => ({ query: 'Alpha Dental', total: 1, prospects: [osmProspect], provider: 'openstreetmap', simulated: false }) } as any,
+      { name: 'openstreetmap_overpass', search: async () => ({ query: 'Alpha Dental', total: 1, prospects: [overpassProspect], provider: 'openstreetmap_overpass', simulated: false }) } as any
+    );
+
+    const result = await composite.search({ query: 'Alpha Dental', limit: 10 });
+    assert.strictEqual(result.total, 1);
+    const merged = result.prospects[0];
+    assert.strictEqual(merged.socialProfiles.length, 2);
+    assert.strictEqual(merged.discoveryMetadata?.wikidata, 'Q12345');
+    assert.strictEqual(merged.discoveryMetadata?.whatsapp, '+447000111222');
+  });
+
+  // 35. Wikidata enrichment provider ID validation
+  await test('35. Wikidata enrichment validates Q-identifiers and ignores invalid entities', async () => {
+    const wikidataProvider = new WikidataEnrichmentProvider();
+    // Non-Q IDs safely return null without throwing
+    const resInvalid = await wikidataProvider.enrichByWikidataId('invalid_id');
+    assert.strictEqual(resInvalid, null);
+    const resEmpty = await wikidataProvider.enrichByWikidataId('');
+    assert.strictEqual(resEmpty, null);
   });
 
   console.log(`\n=== RESULTS: ${passed}/${total} TESTS PASSED ===\n`);
