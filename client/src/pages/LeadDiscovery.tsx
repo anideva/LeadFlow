@@ -48,6 +48,11 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
   // Track custom website input value per prospect ID
   const [customWebsites, setCustomWebsites] = useState<Record<string, string>>({});
 
+  // Track inline manual contact edit form state per prospect ID: true = open, false = closed
+  const [editFormOpen, setEditFormOpen] = useState<Record<string, boolean>>({});
+  // Track manual field drafts per prospect ID
+  const [manualEdits, setManualEdits] = useState<Record<string, { phone?: string; address?: string; email?: string; website?: string }>>({});
+
   // Export CSV confirmation modal state
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -169,11 +174,43 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
 
       setUrlInputOpen((prev) => ({ ...prev, [prospect.id]: false }));
       setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'enriched' }));
-      setConversionMsg(`Enriched "${prospect.name}" with public contact data and social profiles!`);
+      setConversionMsg(`Enriched "${prospect.name}" with public contact data and verified details!`);
     } catch (err: any) {
       setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'error' }));
       setError(err.message || `Website enrichment failed for "${prospect.name}".`);
     }
+  };
+
+  const handleSaveManualEdit = (prospect: DiscoveredProspect) => {
+    const edits = manualEdits[prospect.id] || {};
+    const updatedProspect: DiscoveredProspect = {
+      ...prospect,
+      phone: edits.phone !== undefined && edits.phone.trim() !== '' ? edits.phone.trim() : prospect.phone,
+      email: edits.email !== undefined && edits.email.trim() !== '' ? edits.email.trim() : prospect.email,
+      website: edits.website !== undefined && edits.website.trim() !== '' ? edits.website.trim() : prospect.website,
+      location: {
+        ...prospect.location,
+        address: edits.address !== undefined && edits.address.trim() !== '' ? edits.address.trim() : prospect.location?.address
+      },
+      provenance: {
+        ...(prospect.provenance || {}),
+        ...(edits.phone?.trim() ? { phone: { value: edits.phone.trim(), source: 'user_provided', extractedAt: new Date().toISOString() } } : {}),
+        ...(edits.address?.trim() ? { address: { value: edits.address.trim(), source: 'user_provided', extractedAt: new Date().toISOString() } } : {}),
+        ...(edits.email?.trim() ? { email: { value: edits.email.trim(), source: 'user_provided', extractedAt: new Date().toISOString() } } : {}),
+        ...(edits.website?.trim() ? { website: { value: edits.website.trim(), source: 'user_provided', extractedAt: new Date().toISOString() } } : {})
+      },
+      isEnriched: true
+    };
+
+    if (searchResult) {
+      setSearchResult({
+        ...searchResult,
+        prospects: searchResult.prospects.map((p) => (p.id === prospect.id ? updatedProspect : p))
+      });
+    }
+
+    setEditFormOpen((prev) => ({ ...prev, [prospect.id]: false }));
+    setConversionMsg(`Updated contact details for "${prospect.name}".`);
   };
 
   return (
@@ -505,7 +542,7 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
           <p style={{ marginTop: '1rem', color: '#4b5563', fontSize: '0.95rem' }}>
             {selectedSource === 'apify'
               ? 'Searching Google Maps via Apify...'
-              : 'Querying discovery provider and normalizing candidate prospects...'}
+              : 'Discovering businesses and automatically retrieving contact details & social profiles...'}
           </p>
 
         </div>
@@ -766,6 +803,21 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                                   .filter(Boolean)
                                   .join(', ') || <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Location details not listed</span>}
                               </span>
+                              {prospect.provenance?.address?.source && prospect.provenance.address.source !== 'openstreetmap' && (
+                                <span
+                                  style={{
+                                    fontSize: '0.65rem',
+                                    backgroundColor: '#f3f4f6',
+                                    color: '#374151',
+                                    padding: '0.1rem 0.35rem',
+                                    borderRadius: '3px',
+                                    marginLeft: '0.35rem',
+                                    fontWeight: 600
+                                  }}
+                                >
+                                  via {prospect.provenance.address.source === 'user_provided' ? 'Manual Edit' : prospect.provenance.address.source}
+                                </span>
+                              )}
                               {mapUrl && (
                                 <a
                                   href={mapUrl}
@@ -800,14 +852,29 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                                 >
                                   {prospect.phone}
                                 </a>
-                                {prospect.provenance?.phone?.source === 'website' && (
-                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#f3e8ff', color: '#6b21a8', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
-                                    via Website
-                                  </span>
-                                )}
-                                {prospect.provenance?.phone?.source === 'wikidata' && (
-                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#e0e7ff', color: '#3730a3', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
-                                    via Wikidata
+                                {prospect.provenance?.phone?.source && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      backgroundColor:
+                                        prospect.provenance.phone.source === 'user_provided'
+                                          ? '#fef3c7'
+                                          : prospect.provenance.phone.source.toLowerCase().includes('google')
+                                          ? '#e0f2fe'
+                                          : '#f3e8ff',
+                                      color:
+                                        prospect.provenance.phone.source === 'user_provided'
+                                          ? '#92400e'
+                                          : prospect.provenance.phone.source.toLowerCase().includes('google')
+                                          ? '#0369a1'
+                                          : '#6b21a8',
+                                      padding: '0.1rem 0.35rem',
+                                      borderRadius: '3px',
+                                      marginLeft: '0.35rem',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    via {prospect.provenance.phone.source === 'user_provided' ? 'Manual Edit' : prospect.provenance.phone.source}
                                   </span>
                                 )}
                               </span>
@@ -841,14 +908,25 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                                 >
                                   {prospect.email}
                                 </a>
-                                {prospect.provenance?.email?.source === 'website' && (
-                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#f3e8ff', color: '#6b21a8', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
-                                    via Website
-                                  </span>
-                                )}
-                                {prospect.provenance?.email?.source === 'wikidata' && (
-                                  <span style={{ fontSize: '0.65rem', backgroundColor: '#e0e7ff', color: '#3730a3', padding: '0.1rem 0.35rem', borderRadius: '3px', marginLeft: '0.35rem', fontWeight: 600 }}>
-                                    via Wikidata
+                                {prospect.provenance?.email?.source && (
+                                  <span
+                                    style={{
+                                      fontSize: '0.65rem',
+                                      backgroundColor:
+                                        prospect.provenance.email.source === 'user_provided'
+                                          ? '#fef3c7'
+                                          : '#f3e8ff',
+                                      color:
+                                        prospect.provenance.email.source === 'user_provided'
+                                          ? '#92400e'
+                                          : '#6b21a8',
+                                      padding: '0.1rem 0.35rem',
+                                      borderRadius: '3px',
+                                      marginLeft: '0.35rem',
+                                      fontWeight: 600
+                                    }}
+                                  >
+                                    via {prospect.provenance.email.source === 'user_provided' ? 'Manual Edit' : prospect.provenance.email.source}
                                   </span>
                                 )}
                               </span>
@@ -906,7 +984,7 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                                       gap: '0.2rem'
                                     }}
                                   >
-                                    {sp.platform} ↗
+                                    {sp.platform} {sp.source ? `(${sp.source})` : ''} ↗
                                   </a>
                                 );
                               })}
@@ -940,31 +1018,8 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                         </div>
 
                         <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                          {/* Website Enrichment Action / Status */}
-                          {prospect.website ? (
-                            <button
-                              type="button"
-                              onClick={() => handleEnrich(prospect)}
-                              disabled={enrichStatus === 'loading' || prospect.isEnriched}
-                              style={{
-                                padding: '0.4rem 0.75rem',
-                                borderRadius: '6px',
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                                border: prospect.isEnriched ? '1px solid #d8b4fe' : '1px solid #c084fc',
-                                backgroundColor: prospect.isEnriched ? '#faf5ff' : '#ffffff',
-                                color: prospect.isEnriched ? '#6b21a8' : '#7e22ce',
-                                cursor: enrichStatus === 'loading' || prospect.isEnriched ? 'default' : 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem'
-                              }}
-                            >
-                              {enrichStatus === 'loading' && 'Enriching...'}
-                              {prospect.isEnriched && '✨ Enriched'}
-                              {!prospect.isEnriched && enrichStatus !== 'loading' && '✨ Enrich'}
-                            </button>
-                          ) : prospect.isEnriched ? (
+                          {/* 1-Click Background Enrichment (works for all prospects, with or without website) */}
+                          {prospect.isEnriched ? (
                             <span
                               style={{
                                 fontSize: '0.75rem',
@@ -984,17 +1039,16 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                           ) : (
                             <button
                               type="button"
-                              onClick={() => {
-                                setUrlInputOpen((prev) => ({ ...prev, [prospect.id]: !prev[prospect.id] }));
-                              }}
+                              onClick={() => handleEnrich(prospect)}
                               disabled={enrichStatus === 'loading'}
+                              title="Search Google, directories, and web pages in the background to extract phone numbers, address, and website"
                               style={{
                                 padding: '0.4rem 0.75rem',
                                 borderRadius: '6px',
                                 fontSize: '0.78rem',
                                 fontWeight: 600,
                                 border: '1px solid #c084fc',
-                                backgroundColor: urlInputOpen[prospect.id] ? '#faf5ff' : '#ffffff',
+                                backgroundColor: enrichStatus === 'loading' ? '#faf5ff' : '#ffffff',
                                 color: '#7e22ce',
                                 cursor: enrichStatus === 'loading' ? 'default' : 'pointer',
                                 display: 'flex',
@@ -1002,9 +1056,47 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                                 gap: '0.25rem'
                               }}
                             >
-                              {enrichStatus === 'loading' ? 'Enriching...' : '✨ Enrich'}
+                              {enrichStatus === 'loading' ? 'Searching & Enriching...' : '✨ Enrich'}
                             </button>
                           )}
+
+                          {/* Manual Edit / Add Details Button */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditFormOpen((prev) => {
+                                const nextState = !prev[prospect.id];
+                                if (nextState) {
+                                  setManualEdits((drafts) => ({
+                                    ...drafts,
+                                    [prospect.id]: {
+                                      phone: prospect.phone || '',
+                                      address: prospect.location?.address || '',
+                                      email: prospect.email || '',
+                                      website: prospect.website || ''
+                                    }
+                                  }));
+                                }
+                                return { ...prev, [prospect.id]: nextState };
+                              });
+                            }}
+                            style={{
+                              padding: '0.4rem 0.65rem',
+                              borderRadius: '6px',
+                              fontSize: '0.78rem',
+                              fontWeight: 500,
+                              border: '1px solid #d1d5db',
+                              backgroundColor: editFormOpen[prospect.id] ? '#f3f4f6' : '#ffffff',
+                              color: '#374151',
+                              cursor: 'pointer',
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: '0.25rem'
+                            }}
+                            title="Manually edit or enter phone, address, or email"
+                          >
+                            ✏️ Edit
+                          </button>
 
                           <button
                             type="button"
@@ -1036,6 +1128,147 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                           </button>
                         </div>
                       </div>
+
+                      {/* Manual Contact Edit Form Drawer */}
+                      {editFormOpen[prospect.id] && (
+                        <div
+                          style={{
+                            marginTop: '0.75rem',
+                            padding: '0.75rem',
+                            backgroundColor: '#f8fafc',
+                            border: '1px solid #cbd5e1',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.5rem'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem' }}>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: '#334155' }}>
+                              ✏️ Edit / Add Contact Details manually:
+                            </span>
+                            <a
+                              href={`https://www.google.com/search?q=${encodeURIComponent(
+                                [prospect.name, prospect.location?.city].filter(Boolean).join(' ')
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: '0.72rem', color: '#2563eb', textDecoration: 'none', fontWeight: 500 }}
+                              title="Check Google Knowledge Panel or Search listing"
+                            >
+                              🔍 Check Google Listing ↗
+                            </a>
+                          </div>
+
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.5rem' }}>
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#475569', marginBottom: '0.15rem' }}>
+                                📞 Phone / Mobile Number
+                              </label>
+                              <input
+                                type="text"
+                                value={manualEdits[prospect.id]?.phone ?? prospect.phone ?? ''}
+                                onChange={(e) =>
+                                  setManualEdits((prev) => ({
+                                    ...prev,
+                                    [prospect.id]: { ...(prev[prospect.id] || {}), phone: e.target.value }
+                                  }))
+                                }
+                                placeholder="e.g. 098640 28348 or +91 98640 28348"
+                                style={{ width: '100%', padding: '0.35rem 0.5rem', fontSize: '0.78rem', border: '1px solid #cbd5e1', borderRadius: '4px', boxSizing: 'border-box' }}
+                              />
+                            </div>
+
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#475569', marginBottom: '0.15rem' }}>
+                                📍 Street Address
+                              </label>
+                              <input
+                                type="text"
+                                value={manualEdits[prospect.id]?.address ?? prospect.location?.address ?? ''}
+                                onChange={(e) =>
+                                  setManualEdits((prev) => ({
+                                    ...prev,
+                                    [prospect.id]: { ...(prev[prospect.id] || {}), address: e.target.value }
+                                  }))
+                                }
+                                placeholder="e.g. 2nd floor, Care Building, Maligaon"
+                                style={{ width: '100%', padding: '0.35rem 0.5rem', fontSize: '0.78rem', border: '1px solid #cbd5e1', borderRadius: '4px', boxSizing: 'border-box' }}
+                              />
+                            </div>
+
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#475569', marginBottom: '0.15rem' }}>
+                                ✉️ Email Address
+                              </label>
+                              <input
+                                type="text"
+                                value={manualEdits[prospect.id]?.email ?? prospect.email ?? ''}
+                                onChange={(e) =>
+                                  setManualEdits((prev) => ({
+                                    ...prev,
+                                    [prospect.id]: { ...(prev[prospect.id] || {}), email: e.target.value }
+                                  }))
+                                }
+                                placeholder="e.g. contact@business.com"
+                                style={{ width: '100%', padding: '0.35rem 0.5rem', fontSize: '0.78rem', border: '1px solid #cbd5e1', borderRadius: '4px', boxSizing: 'border-box' }}
+                              />
+                            </div>
+
+                            <div>
+                              <label style={{ display: 'block', fontSize: '0.72rem', fontWeight: 600, color: '#475569', marginBottom: '0.15rem' }}>
+                                🌐 Website or Maps URL
+                              </label>
+                              <input
+                                type="text"
+                                value={manualEdits[prospect.id]?.website ?? prospect.website ?? ''}
+                                onChange={(e) =>
+                                  setManualEdits((prev) => ({
+                                    ...prev,
+                                    [prospect.id]: { ...(prev[prospect.id] || {}), website: e.target.value }
+                                  }))
+                                }
+                                placeholder="e.g. example.com or Google Maps URL"
+                                style={{ width: '100%', padding: '0.35rem 0.5rem', fontSize: '0.78rem', border: '1px solid #cbd5e1', borderRadius: '4px', boxSizing: 'border-box' }}
+                              />
+                            </div>
+                          </div>
+
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem', marginTop: '0.25rem' }}>
+                            <button
+                              type="button"
+                              onClick={() => setEditFormOpen((prev) => ({ ...prev, [prospect.id]: false }))}
+                              style={{
+                                padding: '0.35rem 0.65rem',
+                                backgroundColor: '#f1f5f9',
+                                border: '1px solid #cbd5e1',
+                                borderRadius: '4px',
+                                fontSize: '0.75rem',
+                                cursor: 'pointer',
+                                color: '#475569'
+                              }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleSaveManualEdit(prospect)}
+                              style={{
+                                padding: '0.35rem 0.85rem',
+                                backgroundColor: '#0284c7',
+                                border: 'none',
+                                borderRadius: '4px',
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                cursor: 'pointer',
+                                color: '#ffffff'
+                              }}
+                            >
+                              Save Details
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       {/* Inline Website URL Entry Tray when prospect has no website in OSM */}
                       {urlInputOpen[prospect.id] && !prospect.isEnriched && (

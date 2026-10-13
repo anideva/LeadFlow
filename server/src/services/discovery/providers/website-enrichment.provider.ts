@@ -450,6 +450,11 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
       return null;
     }
 
+    // Filter out Facebook/meta profile or page numeric IDs (e.g. 100063818627208)
+    if (digitsOnly.length >= 12 && digitsOnly.startsWith('1000')) {
+      return null;
+    }
+
     // Filter out obvious years or dates (e.g. 2024, 2025)
     if (digitsOnly.length === 8 && (digitsOnly.startsWith('202') || digitsOnly.startsWith('199'))) {
       return null;
@@ -470,13 +475,17 @@ export class WebsiteEnrichmentProvider implements IEnrichmentProvider {
     if (!url || typeof url !== 'string') return;
     const cleanCandidate = url.trim();
 
-    // Disqualify share intents
+    // Disqualify share intents, oauth, and dialogs
     if (
       cleanCandidate.includes('/sharer') ||
       cleanCandidate.includes('/intent') ||
       cleanCandidate.includes('/share') ||
       cleanCandidate.includes('shareArticle') ||
-      cleanCandidate.includes('hashtag')
+      cleanCandidate.includes('hashtag') ||
+      cleanCandidate.includes('/dialog/') ||
+      cleanCandidate.includes('/oauth') ||
+      cleanCandidate.includes('/tr/') ||
+      cleanCandidate.includes('/plugins/')
     ) {
       return;
     }

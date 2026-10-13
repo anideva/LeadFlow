@@ -5,6 +5,7 @@ import { OpenStreetMapDiscoveryProvider } from '../providers/openstreetmap.provi
 import { DiscoveryProviderFactory } from '../discovery-provider.factory';
 import { WebsiteEnrichmentProvider } from '../providers/website-enrichment.provider';
 import { WikidataEnrichmentProvider } from '../providers/wikidata.provider';
+import { WebKnowledgeSearchProvider } from '../providers/web-knowledge.provider';
 import { IDiscoveryProvider } from '../discovery.provider';
 import { IEnrichmentProvider } from '../enrichment.provider';
 import { DiscoveryService } from '../discovery.service';
@@ -1164,31 +1165,196 @@ async function runTests() {
     }
   });
 
-  // 38. DiscoveryService.enrich throws 400 when neither website nor Wikidata is available
-  await test('38. DiscoveryService.enrich throws 400 when neither website nor Wikidata is available', async () => {
-    const bareProspect: DiscoveredProspect = {
-      id: 'osm_node_1002',
-      name: 'Unknown Corner Shop',
-      entityType: 'business',
-      category: 'Shop',
-      location: { city: 'Jaipur' },
-      source: 'openstreetmap',
-      socialProfiles: [],
-      discoveryMetadata: {}
-    };
-
-    let caughtError: any = null;
+  // 38. DiscoveryService.enrich throws 400 when neither website, Wikidata, nor web search finds contact data
+  await test('38. DiscoveryService.enrich throws 400 when neither website, Wikidata, nor web search finds contact data', async () => {
+    const originalWebKnowledge = DiscoveryService.getWebKnowledgeProvider();
     try {
-      await DiscoveryService.enrich('ws_1', 'user_1', {
+      DiscoveryService.setWebKnowledgeProvider({
+        searchBusiness: async () => null
+      } as any);
+
+      const bareProspect: DiscoveredProspect = {
+        id: 'osm_node_1002',
+        name: 'Unknown Corner Shop',
+        entityType: 'business',
+        category: 'Shop',
+        location: { city: 'Jaipur' },
+        source: 'openstreetmap',
+        socialProfiles: [],
+        discoveryMetadata: {}
+      };
+
+      let caughtError: any = null;
+      try {
+        await DiscoveryService.enrich('ws_1', 'user_1', {
+          prospect: bareProspect
+        });
+      } catch (err: any) {
+        caughtError = err;
+      }
+
+      assert(caughtError !== null, 'Should throw an error');
+      assert.strictEqual(caughtError.statusCode, 400, 'Throws HTTP 400 Bad Request');
+      assert(
+        caughtError.message.includes('contact information or official website') ||
+        caughtError.message.includes('valid website URL'),
+        'Helpful error message prompt'
+      );
+    } finally {
+      DiscoveryService.setWebKnowledgeProvider(originalWebKnowledge);
+    }
+  });
+
+  // 39. WebKnowledgeSearchProvider phone validation and anti-junk filtering
+  await test('39. WebKnowledgeSearchProvider validates real mobile/landline numbers and rejects PIN codes and database IDs', () => {
+    const provider = new WebKnowledgeSearchProvider();
+
+    // Valid formats
+    assert.strictEqual(provider.cleanAndValidatePhone('098640 28348'), '+91 98640 28348', 'Sanitizes Indian mobile with leading zero');
+    assert.strictEqual(provider.cleanAndValidatePhone('+91 98640 28348'), '+91 98640 28348', 'Preserves standard +91 format');
+    assert.strictEqual(provider.cleanAndValidatePhone('3056730365'), '+1 (305) 673-0365', 'Formats 10-digit North American phone');
+    assert.strictEqual(provider.cleanAndValidatePhone('020 7946 0991'), '+44 2079 460991', 'Formats UK number with leading zero');
+    assert.strictEqual(provider.cleanAndValidatePhone('+33 1 42 68 55 55'), '+33 1 42 68 55 55', 'Preserves international + number');
+
+    // Anti-junk filters: PIN/ZIP codes, tracking IDs, timestamps, repetitive digits
+    assert.strictEqual(provider.cleanAndValidatePhone('781011'), null, 'Rejects 6-digit Indian PIN code');
+    assert.strictEqual(provider.cleanAndValidatePhone('90210'), null, 'Rejects 5-digit US ZIP code');
+    assert.strictEqual(provider.cleanAndValidatePhone('87019999185123'), null, 'Rejects 14-digit database tracking ID');
+    assert.strictEqual(provider.cleanAndValidatePhone('230903220537'), null, 'Rejects 12-digit timestamp record ID');
+    assert.strictEqual(provider.cleanAndValidatePhone('0000000000'), null, 'Rejects repetitive dummy digits');
+    assert.strictEqual(provider.cleanAndValidatePhone(''), null, 'Rejects empty string');
+  });
+
+  // 40. WebKnowledgeSearchProvider source label identification
+  await test('40. WebKnowledgeSearchProvider accurately identifies human-readable provenance sources from URLs', () => {
+    const provider = new WebKnowledgeSearchProvider();
+    assert.strictEqual(provider.identifySourceLabel('https://www.justdial.com/Guwahati/Dr-Rajib-Dental'), 'Justdial');
+    assert.strictEqual(provider.identifySourceLabel('https://www.google.com/maps/place/Dental+Care'), 'Google Maps');
+    assert.strictEqual(provider.identifySourceLabel('https://maps.app.goo.gl/xyz123'), 'Google Maps');
+    assert.strictEqual(provider.identifySourceLabel('https://www.lybrate.com/doctor/dr-rajib'), 'Lybrate');
+    assert.strictEqual(provider.identifySourceLabel('https://www.practo.com/guwahati/dentist'), 'Practo');
+    assert.strictEqual(provider.identifySourceLabel('https://www.facebook.com/dentalclinic'), 'Facebook');
+    assert.strictEqual(provider.identifySourceLabel('https://somelocalbusiness.in'), 'Web Search');
+  });
+
+  // 41. Automated background web knowledge enrichment for prospects lacking websites
+  await test('41. DiscoveryService.enrich extracts phone and address from web knowledge when prospect lacks website', async () => {
+    const originalEnricher = DiscoveryService.getEnrichmentProvider();
+    const originalWebKnowledge = DiscoveryService.getWebKnowledgeProvider();
+
+    try {
+      const mockWebKnowledge: any = {
+        searchBusiness: async () => ({
+          phones: ['+91 98640 28348'],
+          emails: ['drrajib@dentalcare.com'],
+          address: '2nd Floor, Care Building, Near Apollo Pharmacy, Maligaon Chariali, Guwahati - 781011',
+          website: 'https://guwahati.idbf.in/4118968/dr-rajib-acharyya',
+          sourceName: 'Google / Justdial',
+          sourceUrl: 'https://guwahati.idbf.in/4118968/dr-rajib-acharyya',
+          socialProfiles: [
+            { platform: 'Facebook', url: 'https://facebook.com/drrajibdental' }
+          ],
+          overview: 'Multispeciality dental clinic in Maligaon, Guwahati'
+        })
+      };
+
+      DiscoveryService.setWebKnowledgeProvider(mockWebKnowledge);
+
+      const bareProspect: DiscoveredProspect = {
+        id: 'osm_node_9999',
+        name: "Dr Rajib Acharyya's Multispeciality Dental Clinic",
+        entityType: 'business',
+        category: 'Dentist',
+        location: { city: 'Guwahati' },
+        source: 'openstreetmap',
+        socialProfiles: [],
+        discoveryMetadata: {}
+      };
+
+      const result = await DiscoveryService.enrich('ws_1', 'user_1', {
         prospect: bareProspect
       });
-    } catch (err: any) {
-      caughtError = err;
-    }
 
-    assert(caughtError !== null, 'Should throw an error');
-    assert.strictEqual(caughtError.statusCode, 400, 'Throws HTTP 400 Bad Request');
-    assert(caughtError.message.includes('valid website URL'), 'Helpful error message prompt');
+      assert.strictEqual(result.prospect.isEnriched, true);
+      assert.strictEqual(result.prospect.phone, '+91 98640 28348', 'Extracts verified phone number');
+      assert.strictEqual(result.prospect.provenance?.phone?.source, 'Google / Justdial', 'Attributes explicit provenance source');
+      assert(result.prospect.location.address?.includes('Care Building'), 'Extracts detailed street address');
+      assert.strictEqual(result.prospect.provenance?.address?.source, 'Google / Justdial', 'Attributes address provenance');
+      assert.strictEqual(result.prospect.socialProfiles.length, 1);
+      assert.strictEqual(result.prospect.socialProfiles[0].source, 'Google / Justdial', 'Attributes social profile source');
+    } finally {
+      DiscoveryService.setEnrichmentProvider(originalEnricher);
+      DiscoveryService.setWebKnowledgeProvider(originalWebKnowledge);
+    }
+  });
+
+  // 42. Automated search-time enrichment of business prospects
+  await test('42. DiscoveryService.search automatically returns prospects enriched with contact numbers and social profiles', async () => {
+    const originalProvider = DiscoveryService.getProvider();
+    const originalWebKnowledge = DiscoveryService.getWebKnowledgeProvider();
+
+    try {
+      const mockDiscoveryProvider: any = {
+        name: 'mock_osm',
+        search: async () => ({
+          query: 'dentists in Guwahati',
+          total: 1,
+          prospects: [
+            {
+              id: 'osm_node_101',
+              name: "Dr. Acharya's Dental Clinic",
+              entityType: 'business',
+              category: 'Dentist',
+              location: { city: 'Guwahati' },
+              source: 'openstreetmap',
+              socialProfiles: [],
+              discoveryMetadata: {}
+            }
+          ],
+          provider: 'mock_osm',
+          simulated: false
+        })
+      };
+
+      const mockWebKnowledge: any = {
+        cleanAndValidatePhone: () => '+91 94357 46973',
+        identifySourceLabel: () => 'Google Search',
+        searchBusiness: async () => ({
+          phones: ['+91 94357 46973'],
+          emails: [],
+          address: 'G.S. Road, Guwahati',
+          website: 'https://dracharyadental.com',
+          sourceName: 'Google Search',
+          sourceUrl: 'https://google.com/search?q=dr+acharya',
+          socialProfiles: [
+            { platform: 'Instagram', url: 'https://instagram.com/acharya_dental' },
+            { platform: 'Facebook', url: 'https://facebook.com/acharyadental' }
+          ]
+        })
+      };
+
+      DiscoveryService.setProvider(mockDiscoveryProvider);
+      DiscoveryService.setWebKnowledgeProvider(mockWebKnowledge);
+
+      const searchResult = await DiscoveryService.search('ws_test', 'user_test', {
+        query: 'dentists in Guwahati',
+        limit: 5,
+        autoEnrich: true
+      });
+
+      assert.strictEqual(searchResult.prospects.length, 1);
+      const prospect = searchResult.prospects[0];
+      assert.strictEqual(prospect.isEnriched, true, 'Prospect should be auto-enriched at search time');
+      assert.strictEqual(prospect.phone, '+91 94357 46973', 'Prospect phone should be auto-populated');
+      assert.strictEqual(prospect.website, 'https://dracharyadental.com', 'Prospect website should be auto-populated');
+      assert.strictEqual(prospect.socialProfiles.length, 2, 'Both Instagram and Facebook should be auto-populated');
+      assert.strictEqual(prospect.socialProfiles[0].platform, 'Instagram');
+      assert.strictEqual(prospect.socialProfiles[1].platform, 'Facebook');
+      assert.strictEqual(prospect.provenance?.phone?.source, 'Google Search', 'Provenance is properly attributed');
+    } finally {
+      DiscoveryService.setProvider(originalProvider);
+      DiscoveryService.setWebKnowledgeProvider(originalWebKnowledge);
+    }
   });
 
   console.log(`\n=== RESULTS: ${passed}/${total} TESTS PASSED ===\n`);

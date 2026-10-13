@@ -24,14 +24,15 @@ export const getDiscoveryConfig = async (req: Request, res: Response): Promise<v
 export const searchProspects = async (req: Request, res: Response): Promise<void> => {
   try {
     const user = req.user!;
-    const { query, limit, locationHint, cursor, provider } = req.body;
+    const { query, limit, locationHint, cursor, provider, autoEnrich } = req.body;
 
     const result = await DiscoveryService.search(user.workspaceId, user.id, {
       query,
       limit: limit ? Number(limit) : undefined,
       locationHint,
       cursor,
-      provider: typeof provider === 'string' ? provider.trim() : undefined
+      provider: typeof provider === 'string' ? provider.trim() : undefined,
+      autoEnrich: autoEnrich !== undefined ? Boolean(autoEnrich) : undefined
     });
 
     res.status(200).json({

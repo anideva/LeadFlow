@@ -16,10 +16,12 @@ import { Lead, ILead } from '../../models/Lead.model';
 import { AppError } from '../../utils/error.util';
 import { WorkspaceUsageService } from './workspace-usage.service';
 import { WikidataEnrichmentProvider } from './providers/wikidata.provider';
+import { WebKnowledgeSearchProvider } from './providers/web-knowledge.provider';
 
 export class DiscoveryService {
   private static providerInstance: IDiscoveryProvider = DiscoveryProviderFactory.createProvider();
   private static enrichmentProviderInstance: IEnrichmentProvider = EnrichmentProviderFactory.createProvider();
+  private static webKnowledgeProviderInstance: WebKnowledgeSearchProvider = new WebKnowledgeSearchProvider();
 
   /**
    * Sets or swaps the active discovery data provider (supports DI and testing).
@@ -47,6 +49,20 @@ export class DiscoveryService {
    */
   public static getEnrichmentProvider(): IEnrichmentProvider {
     return this.enrichmentProviderInstance;
+  }
+
+  /**
+   * Sets or swaps the active web knowledge search provider (supports DI and testing).
+   */
+  public static setWebKnowledgeProvider(provider: WebKnowledgeSearchProvider): void {
+    this.webKnowledgeProviderInstance = provider;
+  }
+
+  /**
+   * Returns the currently active web knowledge provider instance.
+   */
+  public static getWebKnowledgeProvider(): WebKnowledgeSearchProvider {
+    return this.webKnowledgeProviderInstance;
   }
 
   /**
@@ -86,32 +102,107 @@ export class DiscoveryService {
       }
     }
 
-    if (!websiteToScrape && !wikiResult) {
-      throw new AppError(400, 'Please provide a valid website URL for this prospect to perform enrichment.');
+    // Background web knowledge discovery search (e.g. Google Maps/Search, Justdial, public directory snippets)
+    let webKnowledgeResult: any = null;
+    if (!websiteToScrape) {
+      try {
+        webKnowledgeResult = await this.webKnowledgeProviderInstance.searchBusiness(
+          prospect.name,
+          prospect.location?.city,
+          prospect.category
+        );
+        // If an independent business website was found in search results, use it for deep scraping
+        if (!websiteToScrape && webKnowledgeResult?.website && !webKnowledgeResult.website.includes('google.com') && !webKnowledgeResult.website.includes('justdial.com')) {
+          websiteToScrape = webKnowledgeResult.website;
+        }
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    if (!websiteToScrape && !wikiResult && (!webKnowledgeResult || (webKnowledgeResult.phones.length === 0 && !webKnowledgeResult.address && webKnowledgeResult.socialProfiles.length === 0))) {
+      throw new AppError(400, 'Unable to automatically locate contact information or official website for this business. You can provide a website URL or enter contact details manually.');
     }
 
     let enrichment: ProspectEnrichmentResult;
     if (websiteToScrape) {
-      enrichment = await this.enrichmentProviderInstance.enrich(
-        websiteToScrape,
-        request.options
-      );
+      try {
+        enrichment = await this.enrichmentProviderInstance.enrich(
+          websiteToScrape,
+          request.options
+        );
+
+        // If website scraping returned 0 phone numbers, supplement from background web knowledge
+        if (!webKnowledgeResult && enrichment.phones.length === 0) {
+          try {
+            webKnowledgeResult = await this.webKnowledgeProviderInstance.searchBusiness(
+              prospect.name,
+              prospect.location?.city,
+              prospect.category
+            );
+          } catch {
+            // Non-blocking
+          }
+        }
+      } catch (scrapeErr) {
+        // If scraping fails (site unreachable/offline), fallback to web knowledge data if available
+        if (webKnowledgeResult || wikiResult) {
+          enrichment = {
+            businessName: undefined,
+            emails: [
+              ...(webKnowledgeResult?.emails || []),
+              ...(wikiResult?.email ? [wikiResult.email] : [])
+            ],
+            phones: [
+              ...(webKnowledgeResult?.phones || []),
+              ...(wikiResult?.phone ? [wikiResult.phone] : [])
+            ],
+            website: websiteToScrape,
+            contactPages: [],
+            socialProfiles: [
+              ...(webKnowledgeResult?.socialProfiles || []),
+              ...(wikiResult?.socialProfiles || [])
+            ],
+            address: webKnowledgeResult?.address,
+            overview: webKnowledgeResult?.overview || wikiResult?.description,
+            provenance: {},
+            metadata: {
+              provider: webKnowledgeResult?.sourceName ? `web_search_${webKnowledgeResult.sourceName.toLowerCase().replace(/\s+/g, '_')}` : 'web_knowledge',
+              targetUrl: websiteToScrape,
+              pagesScanned: [],
+              durationMs: 0,
+              cached: false
+            }
+          };
+        } else {
+          throw scrapeErr;
+        }
+      }
     } else {
-      // Wikidata-only enrichment
+      // Knowledge-based enrichment from web search snippets and Wikidata
       enrichment = {
         businessName: undefined,
-        emails: wikiResult?.email ? [wikiResult.email] : [],
-        phones: wikiResult?.phone ? [wikiResult.phone] : [],
-        website: undefined,
+        emails: [
+          ...(webKnowledgeResult?.emails || []),
+          ...(wikiResult?.email ? [wikiResult.email] : [])
+        ],
+        phones: [
+          ...(webKnowledgeResult?.phones || []),
+          ...(wikiResult?.phone ? [wikiResult.phone] : [])
+        ],
+        website: webKnowledgeResult?.website || wikiResult?.website || undefined,
         contactPages: [],
-        socialProfiles: wikiResult?.socialProfiles || [],
-        address: undefined,
-        overview: wikiResult?.description,
-        provenance: wikiResult?.provenance || {},
+        socialProfiles: [
+          ...(webKnowledgeResult?.socialProfiles || []),
+          ...(wikiResult?.socialProfiles || [])
+        ],
+        address: webKnowledgeResult?.address,
+        overview: webKnowledgeResult?.overview || wikiResult?.description,
+        provenance: {},
         metadata: {
-          provider: 'wikidata',
-          targetUrl: '',
-          pagesScanned: [],
+          provider: webKnowledgeResult?.sourceName ? `web_search_${webKnowledgeResult.sourceName.toLowerCase().replace(/\s+/g, '_')}` : (wikiResult ? 'wikidata' : 'web_knowledge'),
+          targetUrl: webKnowledgeResult?.sourceUrl || '',
+          pagesScanned: webKnowledgeResult?.sourceUrl ? [webKnowledgeResult.sourceUrl] : [],
           durationMs: 0,
           cached: false
         }
@@ -251,6 +342,85 @@ export class DiscoveryService {
       }
     }
 
+    // Merge any supplementary Web Knowledge fields if available
+    if (webKnowledgeResult) {
+      if (!enriched.phone && webKnowledgeResult.phones?.length > 0) {
+        enriched.phone = webKnowledgeResult.phones[0];
+        enriched.provenance.phone = {
+          value: webKnowledgeResult.phones[0],
+          source: webKnowledgeResult.sourceName || 'Web Search',
+          sourceUrl: webKnowledgeResult.sourceUrl,
+          extractedAt: new Date().toISOString()
+        };
+      } else if (enriched.phone && webKnowledgeResult.phones?.includes(enriched.phone)) {
+        enriched.provenance.phone = {
+          value: enriched.phone,
+          source: webKnowledgeResult.sourceName || 'Web Search',
+          sourceUrl: webKnowledgeResult.sourceUrl,
+          extractedAt: new Date().toISOString()
+        };
+      }
+
+      if (!enriched.email && webKnowledgeResult.emails?.length > 0) {
+        enriched.email = webKnowledgeResult.emails[0];
+        enriched.provenance.email = {
+          value: webKnowledgeResult.emails[0],
+          source: webKnowledgeResult.sourceName || 'Web Search',
+          sourceUrl: webKnowledgeResult.sourceUrl,
+          extractedAt: new Date().toISOString()
+        };
+      }
+
+      if (webKnowledgeResult.address && (!enriched.location?.address || enriched.location.address.trim().length === 0)) {
+        enriched.location = enriched.location || {};
+        enriched.location.address = webKnowledgeResult.address;
+        enriched.provenance.address = {
+          value: webKnowledgeResult.address,
+          source: webKnowledgeResult.sourceName || 'Web Search',
+          sourceUrl: webKnowledgeResult.sourceUrl,
+          extractedAt: new Date().toISOString()
+        };
+      } else if (webKnowledgeResult.address && enriched.location?.address === webKnowledgeResult.address) {
+        enriched.provenance.address = {
+          value: webKnowledgeResult.address,
+          source: webKnowledgeResult.sourceName || 'Web Search',
+          sourceUrl: webKnowledgeResult.sourceUrl,
+          extractedAt: new Date().toISOString()
+        };
+      }
+
+      if (webKnowledgeResult.website && !enriched.website) {
+        enriched.website = webKnowledgeResult.website;
+        enriched.provenance.website = {
+          value: webKnowledgeResult.website,
+          source: webKnowledgeResult.sourceName || 'Web Search',
+          sourceUrl: webKnowledgeResult.sourceUrl,
+          extractedAt: new Date().toISOString()
+        };
+      }
+
+      if (webKnowledgeResult.socialProfiles && webKnowledgeResult.socialProfiles.length > 0) {
+        const existingUrls = new Set((enriched.socialProfiles || []).map((s) => s.url.toLowerCase()));
+        const currentSocials = [...(enriched.socialProfiles || [])];
+        for (const sp of webKnowledgeResult.socialProfiles) {
+          if (!existingUrls.has(sp.url.toLowerCase())) {
+            existingUrls.add(sp.url.toLowerCase());
+            currentSocials.push({
+              ...sp,
+              source: sp.source || webKnowledgeResult.sourceName || 'Web Search'
+            });
+          }
+        }
+        enriched.socialProfiles = currentSocials;
+        enriched.provenance.socialProfiles = {
+          value: currentSocials,
+          source: webKnowledgeResult.sourceName || 'Web Search',
+          sourceUrl: webKnowledgeResult.sourceUrl,
+          extractedAt: new Date().toISOString()
+        };
+      }
+    }
+
     enriched.isEnriched = true;
     enriched.enrichmentMetadata = {
       ...enrichment.metadata,
@@ -381,6 +551,10 @@ export class DiscoveryService {
             cursor: request.cursor
           });
 
+          if (request.autoEnrich !== false && fallbackResult.prospects && fallbackResult.prospects.length > 0) {
+            fallbackResult.prospects = await this.autoEnrichProspects(fallbackResult.prospects);
+          }
+
           return {
             ...fallbackResult,
             warning:
@@ -400,14 +574,61 @@ export class DiscoveryService {
         ? DiscoveryProviderFactory.createProvider(request.provider)
         : this.providerInstance;
 
-
-    return await providerToUse.search({
+    const searchResult = await providerToUse.search({
       query: request.query.trim(),
       limit: request.limit,
       locationHint: request.locationHint,
       cursor: request.cursor,
       provider: request.provider
     });
+
+    // Automatically enrich discovered prospects with phone numbers, social profiles, and websites
+    if (request.autoEnrich !== false && searchResult.prospects && searchResult.prospects.length > 0) {
+      searchResult.prospects = await this.autoEnrichProspects(searchResult.prospects);
+    }
+
+    return searchResult;
+  }
+
+  /**
+   * Automatically enriches prospects with contact phone numbers, social media profiles
+   * (Instagram, Facebook, etc.), and official websites in the background.
+   * Runs with bounded concurrency, preserving multi-tenant safety and error resilience.
+   */
+  public static async autoEnrichProspects(prospects: DiscoveredProspect[]): Promise<DiscoveredProspect[]> {
+    if (!prospects || prospects.length === 0) return prospects;
+
+    const toEnrich = prospects.slice(0, 10);
+    const remainder = prospects.slice(10);
+
+    const enrichedList: DiscoveredProspect[] = [];
+
+    // Process in polite batches of 2 to avoid public endpoint rate limits
+    const BATCH_SIZE = 2;
+    for (let i = 0; i < toEnrich.length; i += BATCH_SIZE) {
+      const batch = toEnrich.slice(i, i + BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (prospect) => {
+          // If already enriched with both phone and social profiles, keep as is
+          if (prospect.isEnriched && prospect.phone && (prospect.socialProfiles?.length || 0) > 0) {
+            return prospect;
+          }
+
+          try {
+            const enrichRes = await this.enrich('auto_discovery', 'system', {
+              prospect,
+              options: { timeoutMs: 5000 }
+            });
+            return enrichRes.prospect;
+          } catch {
+            return prospect;
+          }
+        })
+      );
+      enrichedList.push(...batchResults);
+    }
+
+    return [...enrichedList, ...remainder];
   }
 
 

@@ -3,6 +3,7 @@ export type EntityType = 'person' | 'business' | 'organization' | 'unspecified';
 export interface SocialProfile {
   platform: string;
   url: string;
+  source?: string;
 }
 
 export interface ProspectLocation {
@@ -38,7 +39,7 @@ export interface DiscoveredProspect {
   sourceUrl?: string;
   confidenceScore?: number;
   discoveryMetadata: Record<string, any>;
-  provenance?: Record<string, { value: any; source: string; extractedAt?: string }>;
+  provenance?: Record<string, FieldProvenance>;
   isEnriched?: boolean;
   enrichmentMetadata?: Record<string, any>;
 }
@@ -49,6 +50,7 @@ export interface DiscoverySearchRequest {
   locationHint?: string;
   cursor?: string;
   provider?: string;
+  autoEnrich?: boolean;
 }
 
 
@@ -97,6 +99,8 @@ export interface EnrichProspectRequest {
   website?: string;
   options?: {
     forceRefresh?: boolean;
+    timeoutMs?: number;
+    maxHops?: number;
   };
 }
 

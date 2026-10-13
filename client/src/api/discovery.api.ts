@@ -3,6 +3,7 @@ export type EntityType = 'person' | 'business' | 'organization' | 'unspecified';
 export interface SocialProfile {
   platform: string;
   url: string;
+  source?: string;
 }
 
 export interface ProspectLocation {
@@ -11,6 +12,13 @@ export interface ProspectLocation {
   state?: string;
   country?: string;
   postalCode?: string;
+}
+
+export interface FieldProvenance {
+  value: any;
+  source: string;
+  sourceUrl?: string;
+  extractedAt?: string;
 }
 
 export interface DiscoveredProspect {
@@ -31,7 +39,7 @@ export interface DiscoveredProspect {
   sourceUrl?: string;
   confidenceScore?: number;
   discoveryMetadata: Record<string, any>;
-  provenance?: Record<string, { value: any; source: string; extractedAt?: string }>;
+  provenance?: Record<string, FieldProvenance>;
   isEnriched?: boolean;
   enrichmentMetadata?: Record<string, any>;
 }
@@ -105,13 +113,14 @@ export async function searchProspects(
   query: string,
   limit = 8,
   cursor?: string,
-  provider?: string
+  provider?: string,
+  autoEnrich = true
 ): Promise<DiscoverySearchResult> {
   const res = await fetch('/api/discovery/search', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ query, limit, cursor, provider })
+    body: JSON.stringify({ query, limit, cursor, provider, autoEnrich })
   });
 
   const data = await res.json();
