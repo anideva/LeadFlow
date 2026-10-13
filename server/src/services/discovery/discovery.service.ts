@@ -8,6 +8,7 @@ import {
   DiscoveredProspect,
   EnrichProspectRequest,
   EnrichProspectResponse,
+  ProspectEnrichmentResult,
   SocialProfile
 } from '../../types/discovery.types';
 import { LeadService, CreateLeadDTO } from '../lead.service';
@@ -58,14 +59,64 @@ export class DiscoveryService {
     request: EnrichProspectRequest
   ): Promise<EnrichProspectResponse> {
     const prospect = request.prospect;
-    if (!prospect || !prospect.website || typeof prospect.website !== 'string') {
-      throw new AppError(400, 'Prospect must have a valid website URL to perform enrichment.');
+    if (!prospect) {
+      throw new AppError(400, 'Prospect data is required to perform enrichment.');
     }
 
-    const enrichment = await this.enrichmentProviderInstance.enrich(
-      prospect.website,
-      request.options
-    );
+    const customWebsite = request.website?.trim();
+    let websiteToScrape = customWebsite || prospect.website?.trim() || '';
+
+    // If website URL was entered without protocol, prepend https://
+    if (websiteToScrape && !websiteToScrape.startsWith('http://') && !websiteToScrape.startsWith('https://')) {
+      websiteToScrape = `https://${websiteToScrape}`;
+    }
+
+    // Supplementary or primary enrichment via CC0 Wikidata if entity has a wikidata tag
+    let wikiResult: any = null;
+    if (prospect.discoveryMetadata?.wikidata) {
+      try {
+        const wikidataProvider = new WikidataEnrichmentProvider();
+        wikiResult = await wikidataProvider.enrichByWikidataId(prospect.discoveryMetadata.wikidata);
+        // If prospect had no website, but Wikidata provides an official website (P856), use it
+        if (!websiteToScrape && wikiResult?.website) {
+          websiteToScrape = wikiResult.website;
+        }
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    if (!websiteToScrape && !wikiResult) {
+      throw new AppError(400, 'Please provide a valid website URL for this prospect to perform enrichment.');
+    }
+
+    let enrichment: ProspectEnrichmentResult;
+    if (websiteToScrape) {
+      enrichment = await this.enrichmentProviderInstance.enrich(
+        websiteToScrape,
+        request.options
+      );
+    } else {
+      // Wikidata-only enrichment
+      enrichment = {
+        businessName: undefined,
+        emails: wikiResult?.email ? [wikiResult.email] : [],
+        phones: wikiResult?.phone ? [wikiResult.phone] : [],
+        website: undefined,
+        contactPages: [],
+        socialProfiles: wikiResult?.socialProfiles || [],
+        address: undefined,
+        overview: wikiResult?.description,
+        provenance: wikiResult?.provenance || {},
+        metadata: {
+          provider: 'wikidata',
+          targetUrl: '',
+          pagesScanned: [],
+          durationMs: 0,
+          cached: false
+        }
+      };
+    }
 
     // Deep clone prospect to prevent unexpected mutations
     const enriched: DiscoveredProspect = JSON.parse(JSON.stringify(prospect));
@@ -83,6 +134,16 @@ export class DiscoveryService {
       if (enriched.email && !enriched.provenance.email) {
         enriched.provenance.email = { value: enriched.email, source: enriched.source };
       }
+    }
+
+    // Attach website to prospect if newly provided or discovered
+    if (websiteToScrape) {
+      enriched.website = websiteToScrape;
+      enriched.provenance.website = {
+        value: websiteToScrape,
+        source: customWebsite ? 'user_provided' : (prospect.website ? enriched.source : 'wikidata'),
+        extractedAt: new Date().toISOString()
+      };
     }
 
     // Apply enriched email (prefer existing if already verified, or adopt newly discovered)
@@ -159,42 +220,34 @@ export class DiscoveryService {
       };
     }
 
-    // Supplementary enrichment via CC0 Wikidata if entity has a wikidata tag
-    if (prospect.discoveryMetadata?.wikidata) {
-      try {
-        const wikidataProvider = new WikidataEnrichmentProvider();
-        const wikiResult = await wikidataProvider.enrichByWikidataId(prospect.discoveryMetadata.wikidata);
-        if (wikiResult) {
-          if (!enriched.phone && wikiResult.phone) {
-            enriched.phone = wikiResult.phone;
-            enriched.provenance.phone = {
-              value: wikiResult.phone,
-              source: 'wikidata',
-              extractedAt: new Date().toISOString()
-            };
-          }
-          if (!enriched.email && wikiResult.email) {
-            enriched.email = wikiResult.email;
-            enriched.provenance.email = {
-              value: wikiResult.email,
-              source: 'wikidata',
-              extractedAt: new Date().toISOString()
-            };
-          }
-          if (wikiResult.socialProfiles && wikiResult.socialProfiles.length > 0) {
-            const existingUrls = new Set((enriched.socialProfiles || []).map((s) => s.url.toLowerCase()));
-            const currentSocials = [...(enriched.socialProfiles || [])];
-            for (const sp of wikiResult.socialProfiles) {
-              if (!existingUrls.has(sp.url.toLowerCase())) {
-                existingUrls.add(sp.url.toLowerCase());
-                currentSocials.push(sp);
-              }
-            }
-            enriched.socialProfiles = currentSocials;
+    // Merge any supplementary Wikidata fields if available
+    if (wikiResult) {
+      if (!enriched.phone && wikiResult.phone) {
+        enriched.phone = wikiResult.phone;
+        enriched.provenance.phone = {
+          value: wikiResult.phone,
+          source: 'wikidata',
+          extractedAt: new Date().toISOString()
+        };
+      }
+      if (!enriched.email && wikiResult.email) {
+        enriched.email = wikiResult.email;
+        enriched.provenance.email = {
+          value: wikiResult.email,
+          source: 'wikidata',
+          extractedAt: new Date().toISOString()
+        };
+      }
+      if (wikiResult.socialProfiles && wikiResult.socialProfiles.length > 0) {
+        const existingUrls = new Set((enriched.socialProfiles || []).map((s) => s.url.toLowerCase()));
+        const currentSocials = [...(enriched.socialProfiles || [])];
+        for (const sp of wikiResult.socialProfiles) {
+          if (!existingUrls.has(sp.url.toLowerCase())) {
+            existingUrls.add(sp.url.toLowerCase());
+            currentSocials.push(sp);
           }
         }
-      } catch {
-        // Non-blocking supplementary enrichment
+        enriched.socialProfiles = currentSocials;
       }
     }
 

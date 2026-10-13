@@ -43,6 +43,11 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
   // Track website enrichment state per prospect ID: 'idle' | 'loading' | 'enriched' | 'error'
   const [enrichingState, setEnrichingState] = useState<Record<string, EnrichStatus>>({});
 
+  // Track inline website entry prompt state per prospect ID: true = open, false = closed
+  const [urlInputOpen, setUrlInputOpen] = useState<Record<string, boolean>>({});
+  // Track custom website input value per prospect ID
+  const [customWebsites, setCustomWebsites] = useState<Record<string, string>>({});
+
   // Export CSV confirmation modal state
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -145,12 +150,13 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
     }
   };
 
-  const handleEnrich = async (prospect: DiscoveredProspect) => {
+  const handleEnrich = async (prospect: DiscoveredProspect, customUrl?: string) => {
     try {
       setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'loading' }));
       setError(null);
 
-      const { prospect: enrichedProspect } = await enrichProspect(prospect);
+      const targetUrl = customUrl?.trim() || prospect.website;
+      const { prospect: enrichedProspect } = await enrichProspect(prospect, targetUrl);
 
       if (searchResult) {
         setSearchResult({
@@ -161,8 +167,9 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
         });
       }
 
+      setUrlInputOpen((prev) => ({ ...prev, [prospect.id]: false }));
       setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'enriched' }));
-      setConversionMsg(`Enriched "${prospect.name}" with public contact data from its website!`);
+      setConversionMsg(`Enriched "${prospect.name}" with public contact data and social profiles!`);
     } catch (err: any) {
       setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'error' }));
       setError(err.message || `Website enrichment failed for "${prospect.name}".`);
@@ -957,23 +964,46 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                               {prospect.isEnriched && '✨ Enriched'}
                               {!prospect.isEnriched && enrichStatus !== 'loading' && '✨ Enrich'}
                             </button>
-                          ) : (
+                          ) : prospect.isEnriched ? (
                             <span
-                              title="Website enrichment requires a public website URL, which is not listed in OpenStreetMap for this listing."
                               style={{
-                                fontSize: '0.72rem',
-                                color: '#9ca3af',
-                                padding: '0.35rem 0.55rem',
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                                backgroundColor: '#faf5ff',
+                                color: '#6b21a8',
+                                border: '1px solid #d8b4fe',
+                                padding: '0.35rem 0.65rem',
                                 borderRadius: '6px',
-                                backgroundColor: '#f9fafb',
-                                border: '1px dashed #e5e7eb',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '0.25rem'
                               }}
                             >
-                              <span>🌐</span> No Web to Enrich
+                              ✨ Enriched
                             </span>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setUrlInputOpen((prev) => ({ ...prev, [prospect.id]: !prev[prospect.id] }));
+                              }}
+                              disabled={enrichStatus === 'loading'}
+                              style={{
+                                padding: '0.4rem 0.75rem',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 600,
+                                border: '1px solid #c084fc',
+                                backgroundColor: urlInputOpen[prospect.id] ? '#faf5ff' : '#ffffff',
+                                color: '#7e22ce',
+                                cursor: enrichStatus === 'loading' ? 'default' : 'pointer',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}
+                            >
+                              {enrichStatus === 'loading' ? 'Enriching...' : '✨ Enrich'}
+                            </button>
                           )}
 
                           <button
@@ -988,10 +1018,10 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                               border: status === 'saved' ? '1px solid #86efac' : 'none',
                               backgroundColor:
                                 status === 'saved'
-                                  ? '#f0fdf4'
-                                  : status === 'converting'
-                                  ? '#9ca3af'
-                                  : '#059669',
+                                    ? '#f0fdf4'
+                                    : status === 'converting'
+                                    ? '#9ca3af'
+                                    : '#059669',
                               color: status === 'saved' ? '#15803d' : '#ffffff',
                               cursor: status === 'saved' || status === 'converting' ? 'default' : 'pointer',
                               display: 'flex',
@@ -1006,6 +1036,94 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                           </button>
                         </div>
                       </div>
+
+                      {/* Inline Website URL Entry Tray when prospect has no website in OSM */}
+                      {urlInputOpen[prospect.id] && !prospect.isEnriched && (
+                        <div
+                          style={{
+                            marginTop: '0.75rem',
+                            padding: '0.75rem',
+                            backgroundColor: '#faf5ff',
+                            border: '1px solid #e9d5ff',
+                            borderRadius: '8px',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '0.5rem'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem' }}>
+                            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b21a8' }}>
+                              Enter website to extract contacts & social media:
+                            </span>
+                            <a
+                              href={`https://www.google.com/search?q=${encodeURIComponent(
+                                [prospect.name, prospect.location?.city, 'official website'].filter(Boolean).join(' ')
+                              )}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              style={{ fontSize: '0.72rem', color: '#2563eb', textDecoration: 'none', fontWeight: 500 }}
+                              title="Search Google for official website"
+                            >
+                              🔍 Find on Google ↗
+                            </a>
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
+                            <input
+                              type="text"
+                              value={customWebsites[prospect.id] || ''}
+                              onChange={(e) => setCustomWebsites({ ...customWebsites, [prospect.id]: e.target.value })}
+                              placeholder="e.g. example.com or https://..."
+                              style={{
+                                flex: 1,
+                                padding: '0.35rem 0.6rem',
+                                fontSize: '0.8rem',
+                                border: '1px solid #d8b4fe',
+                                borderRadius: '6px',
+                                outline: 'none'
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleEnrich(prospect, customWebsites[prospect.id]);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleEnrich(prospect, customWebsites[prospect.id])}
+                              disabled={enrichStatus === 'loading' || !customWebsites[prospect.id]?.trim()}
+                              style={{
+                                padding: '0.35rem 0.75rem',
+                                backgroundColor: !customWebsites[prospect.id]?.trim() ? '#d8b4fe' : '#7e22ce',
+                                color: '#ffffff',
+                                border: 'none',
+                                borderRadius: '6px',
+                                fontSize: '0.78rem',
+                                fontWeight: 600,
+                                cursor: !customWebsites[prospect.id]?.trim() ? 'not-allowed' : 'pointer',
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {enrichStatus === 'loading' ? 'Enriching...' : 'Enrich Now'}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setUrlInputOpen((prev) => ({ ...prev, [prospect.id]: false }))}
+                              style={{
+                                padding: '0.35rem 0.5rem',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                color: '#9ca3af',
+                                cursor: 'pointer',
+                                fontSize: '0.85rem'
+                              }}
+                              title="Cancel"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })}

@@ -94,6 +94,7 @@ export interface ProspectEnrichmentResult {
 
 export interface EnrichProspectRequest {
   prospect: DiscoveredProspect;
+  website?: string;
   options?: {
     forceRefresh?: boolean;
   };

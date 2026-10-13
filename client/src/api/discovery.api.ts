@@ -128,10 +128,11 @@ export async function searchProspects(
 
 
 /**
- * Enriches a discovered prospect using its official public website.
+ * Enriches a discovered prospect using its official public website or a provided URL.
  */
 export async function enrichProspect(
   prospect: DiscoveredProspect,
+  websiteUrl?: string,
   forceRefresh = false
 ): Promise<{ prospect: DiscoveredProspect; enrichment: ProspectEnrichmentResult }> {
   const res = await fetch('/api/discovery/enrich', {
@@ -140,6 +141,7 @@ export async function enrichProspect(
     credentials: 'include',
     body: JSON.stringify({
       prospect,
+      website: websiteUrl,
       options: { forceRefresh }
     })
   });

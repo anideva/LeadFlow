@@ -6,6 +6,8 @@ import { DiscoveryProviderFactory } from '../discovery-provider.factory';
 import { WebsiteEnrichmentProvider } from '../providers/website-enrichment.provider';
 import { WikidataEnrichmentProvider } from '../providers/wikidata.provider';
 import { IDiscoveryProvider } from '../discovery.provider';
+import { IEnrichmentProvider } from '../enrichment.provider';
+import { DiscoveryService } from '../discovery.service';
 import { DiscoverySearchRequest, DiscoverySearchResult, DiscoveredProspect } from '../../../types/discovery.types';
 
 async function runTests() {
@@ -1053,6 +1055,140 @@ async function runTests() {
     assert.strictEqual(resInvalid, null);
     const resEmpty = await wikidataProvider.enrichByWikidataId('');
     assert.strictEqual(resEmpty, null);
+  });
+
+  // 36. DiscoveryService.enrich with user-provided website when prospect lacks website
+  await test('36. DiscoveryService.enrich accepts custom user-provided website URL for prospect lacking website', async () => {
+    const originalEnricher = DiscoveryService.getEnrichmentProvider();
+    let scrapedUrl = '';
+    const mockEnricher: IEnrichmentProvider = {
+      name: 'mock_enricher',
+      enrich: async (url: string) => {
+        scrapedUrl = url;
+        return {
+          businessName: 'Shreeram Flowers',
+          emails: ['contact@shreeramflowers.com'],
+          phones: ['+91 141 2223344'],
+          website: url,
+          contactPages: [`${url}/contact`],
+          socialProfiles: [{ platform: 'Instagram', url: 'https://instagram.com/shreeramflowers' }],
+          address: 'Civil Lines, Jaipur, RJ',
+          overview: 'Florist shop in Jaipur',
+          provenance: {},
+          metadata: {
+            provider: 'mock_enricher',
+            targetUrl: url,
+            pagesScanned: [url],
+            durationMs: 15,
+            cached: false
+          }
+        };
+      }
+    };
+
+    try {
+      DiscoveryService.setEnrichmentProvider(mockEnricher);
+      const bareProspect: DiscoveredProspect = {
+        id: 'osm_node_1001',
+        name: 'Shreeram Flowers',
+        entityType: 'business',
+        category: 'Florist',
+        location: { city: 'Jaipur' },
+        source: 'openstreetmap',
+        socialProfiles: [],
+        discoveryMetadata: {}
+      };
+
+      const result = await DiscoveryService.enrich('ws_1', 'user_1', {
+        prospect: bareProspect,
+        website: 'jaipurflowers.com'
+      });
+
+      assert.strictEqual(scrapedUrl, 'https://jaipurflowers.com', 'Prepends https:// to bare domain');
+      assert.strictEqual(result.prospect.website, 'https://jaipurflowers.com', 'Attaches scraped website to prospect');
+      assert.strictEqual(result.prospect.isEnriched, true);
+      assert.strictEqual(result.prospect.email, 'contact@shreeramflowers.com');
+      assert.strictEqual(result.prospect.phone, '+91 141 2223344');
+      assert.strictEqual(result.prospect.provenance?.website?.source, 'user_provided');
+      assert.strictEqual(result.prospect.socialProfiles.length, 1);
+      assert.strictEqual(result.prospect.socialProfiles[0].platform, 'Instagram');
+    } finally {
+      DiscoveryService.setEnrichmentProvider(originalEnricher);
+    }
+  });
+
+  // 37. DiscoveryService.enrich falls back to Wikidata when prospect website is missing
+  await test('37. DiscoveryService.enrich enriches from Wikidata claims when prospect website is missing', async () => {
+    const originalEnricher = DiscoveryService.getEnrichmentProvider();
+    const originalWikidataEnrich = WikidataEnrichmentProvider.prototype.enrichByWikidataId;
+
+    try {
+      WikidataEnrichmentProvider.prototype.enrichByWikidataId = async (id: string) => {
+        if (id === 'Q99999') {
+          return {
+            wikidataId: 'Q99999',
+            phone: '+44 20 7946 0991',
+            email: 'info@nationalgallery.org.uk',
+            socialProfiles: [{ platform: 'Twitter', url: 'https://twitter.com/NationalGallery' }],
+            description: 'Art museum in London',
+            provenance: { wikidataId: 'Q99999' }
+          };
+        }
+        return null;
+      };
+
+      const prospectWithWiki: DiscoveredProspect = {
+        id: 'osm_node_555',
+        name: 'The National Gallery',
+        entityType: 'business',
+        category: 'Museum',
+        location: { city: 'London' },
+        source: 'openstreetmap',
+        socialProfiles: [],
+        discoveryMetadata: { wikidata: 'Q99999' }
+      };
+
+      const result = await DiscoveryService.enrich('ws_1', 'user_1', {
+        prospect: prospectWithWiki
+      });
+
+      assert.strictEqual(result.prospect.isEnriched, true);
+      assert.strictEqual(result.prospect.phone, '+44 20 7946 0991');
+      assert.strictEqual(result.prospect.email, 'info@nationalgallery.org.uk');
+      assert.strictEqual(result.prospect.socialProfiles.length, 1);
+      assert.strictEqual(result.prospect.socialProfiles[0].platform, 'Twitter');
+      assert.strictEqual(result.prospect.description, 'Art museum in London');
+    } finally {
+      DiscoveryService.setEnrichmentProvider(originalEnricher);
+      WikidataEnrichmentProvider.prototype.enrichByWikidataId = originalWikidataEnrich;
+    }
+  });
+
+  // 38. DiscoveryService.enrich throws 400 when neither website nor Wikidata is available
+  await test('38. DiscoveryService.enrich throws 400 when neither website nor Wikidata is available', async () => {
+    const bareProspect: DiscoveredProspect = {
+      id: 'osm_node_1002',
+      name: 'Unknown Corner Shop',
+      entityType: 'business',
+      category: 'Shop',
+      location: { city: 'Jaipur' },
+      source: 'openstreetmap',
+      socialProfiles: [],
+      discoveryMetadata: {}
+    };
+
+    let caughtError: any = null;
+    try {
+      await DiscoveryService.enrich('ws_1', 'user_1', {
+        prospect: bareProspect
+      });
+    } catch (err: any) {
+      caughtError = err;
+    }
+
+    assert(caughtError !== null, 'Should throw an error');
+    assert.strictEqual(caughtError.statusCode, 400, 'Throws HTTP 400 Bad Request');
+    assert(caughtError.message.includes('valid website URL'), 'Helpful error message prompt');
   });
 
   console.log(`\n=== RESULTS: ${passed}/${total} TESTS PASSED ===\n`);
