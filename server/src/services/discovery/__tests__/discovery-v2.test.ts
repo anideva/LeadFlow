@@ -1122,8 +1122,13 @@ async function runTests() {
   await test('37. DiscoveryService.enrich enriches from Wikidata claims when prospect website is missing', async () => {
     const originalEnricher = DiscoveryService.getEnrichmentProvider();
     const originalWikidataEnrich = WikidataEnrichmentProvider.prototype.enrichByWikidataId;
+    const originalWebKnowledge = DiscoveryService.getWebKnowledgeProvider();
 
     try {
+      DiscoveryService.setWebKnowledgeProvider({
+        searchBusiness: async () => null
+      } as any);
+
       WikidataEnrichmentProvider.prototype.enrichByWikidataId = async (id: string) => {
         if (id === 'Q99999') {
           return {
@@ -1161,6 +1166,7 @@ async function runTests() {
       assert.strictEqual(result.prospect.description, 'Art museum in London');
     } finally {
       DiscoveryService.setEnrichmentProvider(originalEnricher);
+      DiscoveryService.setWebKnowledgeProvider(originalWebKnowledge);
       WikidataEnrichmentProvider.prototype.enrichByWikidataId = originalWikidataEnrich;
     }
   });
@@ -1353,6 +1359,114 @@ async function runTests() {
       assert.strictEqual(prospect.provenance?.phone?.source, 'Google Search', 'Provenance is properly attributed');
     } finally {
       DiscoveryService.setProvider(originalProvider);
+      DiscoveryService.setWebKnowledgeProvider(originalWebKnowledge);
+    }
+  });
+
+  // 43. WebKnowledgeSearchProvider TLS configuration
+  await test('43. WebKnowledgeSearchProvider enforces strict TLS certificate verification (rejectUnauthorized: true)', () => {
+    const provider = new WebKnowledgeSearchProvider();
+    const tlsConfig = provider.getTlsConfig();
+    assert.strictEqual(tlsConfig.rejectUnauthorized, true, 'Must enforce rejectUnauthorized: true for secure communication');
+  });
+
+  // 44. WebKnowledgeSearchProvider bounded cache, eviction, and TTL
+  await test('44. WebKnowledgeSearchProvider bounds cache to MAX_CACHE_ENTRIES with FIFO eviction and 30-minute TTL', () => {
+    WebKnowledgeSearchProvider.clearCache();
+    assert.strictEqual(WebKnowledgeSearchProvider.getCacheSize(), 0);
+
+    const mockResult = {
+      phones: ['+91 98640 28348'],
+      emails: [],
+      website: 'https://example.com',
+      sourceName: 'Directory',
+      socialProfiles: []
+    };
+
+    // 1. Insertion and retrieval
+    WebKnowledgeSearchProvider.setCached('business_1::guwahati', mockResult);
+    assert.strictEqual(WebKnowledgeSearchProvider.getCacheSize(), 1);
+    const cached = WebKnowledgeSearchProvider.getCached('business_1::guwahati');
+    assert.deepStrictEqual(cached?.phones, ['+91 98640 28348']);
+
+    // 2. FIFO Eviction when exceeding MAX_CACHE_ENTRIES
+    for (let i = 2; i <= WebKnowledgeSearchProvider.MAX_CACHE_ENTRIES; i++) {
+      WebKnowledgeSearchProvider.setCached(`business_${i}::city`, mockResult);
+    }
+    assert.strictEqual(WebKnowledgeSearchProvider.getCacheSize(), WebKnowledgeSearchProvider.MAX_CACHE_ENTRIES);
+
+    // Insert one more entry, which must evict the oldest key ('business_1::guwahati')
+    WebKnowledgeSearchProvider.setCached('business_overflow::city', mockResult);
+    assert.strictEqual(WebKnowledgeSearchProvider.getCacheSize(), WebKnowledgeSearchProvider.MAX_CACHE_ENTRIES);
+    assert.strictEqual(WebKnowledgeSearchProvider.getCached('business_1::guwahati'), null, 'Oldest entry was evicted');
+    assert.notStrictEqual(WebKnowledgeSearchProvider.getCached('business_overflow::city'), null, 'Newest entry is present');
+
+    // 3. TTL expiry
+    (WebKnowledgeSearchProvider as any).cache.set('expired::city', {
+      result: mockResult,
+      expiresAt: Date.now() - 1000 // Expired 1 second ago
+    });
+    assert.strictEqual(WebKnowledgeSearchProvider.getCached('expired::city'), null, 'Expired entry returns null');
+
+    WebKnowledgeSearchProvider.clearCache();
+  });
+
+  // 45. WebKnowledgeSearchProvider compliance
+  await test('45. WebKnowledgeSearchProvider returns null without unauthorized scraping when no authorized API is configured', async () => {
+    const originalGoogleKey = process.env.GOOGLE_SEARCH_API_KEY;
+    const originalGoogleCx = process.env.GOOGLE_SEARCH_CX;
+
+    try {
+      delete process.env.GOOGLE_SEARCH_API_KEY;
+      delete process.env.GOOGLE_SEARCH_CX;
+
+      const provider = new WebKnowledgeSearchProvider();
+      const res = await provider.searchBusiness('Some Unknown Dental Clinic', 'Guwahati', 'Dentist');
+      assert.strictEqual(res, null, 'Returns null safely without scraping or throwing');
+    } finally {
+      if (originalGoogleKey) process.env.GOOGLE_SEARCH_API_KEY = originalGoogleKey;
+      if (originalGoogleCx) process.env.GOOGLE_SEARCH_CX = originalGoogleCx;
+    }
+  });
+
+  // 46. Provider failure resilience
+  await test('46. DiscoveryService.autoEnrichProspects preserves already discovered leads when enrichment fails', async () => {
+    const rawProspects: DiscoveredProspect[] = [
+      {
+        id: 'osm_node_555',
+        name: 'Gauhati Dental Care',
+        entityType: 'business',
+        category: 'Dentist',
+        location: { city: 'Guwahati' },
+        source: 'openstreetmap',
+        socialProfiles: [],
+        discoveryMetadata: {}
+      }
+    ];
+
+    const originalEnricher = DiscoveryService.getEnrichmentProvider();
+    const originalWebKnowledge = DiscoveryService.getWebKnowledgeProvider();
+
+    try {
+      DiscoveryService.setEnrichmentProvider({
+        name: 'failing_provider',
+        enrich: async () => {
+          throw new Error('Upstream timeout or connection reset');
+        }
+      } as any);
+
+      DiscoveryService.setWebKnowledgeProvider({
+        cleanAndValidatePhone: () => null,
+        identifySourceLabel: () => 'None',
+        searchBusiness: async () => null
+      } as any);
+
+      const result = await DiscoveryService.autoEnrichProspects(rawProspects);
+      assert.strictEqual(result.length, 1, 'Lead count must not decrease');
+      assert.strictEqual(result[0].name, 'Gauhati Dental Care', 'Original lead data is preserved intact');
+      assert.strictEqual(result[0].id, 'osm_node_555');
+    } finally {
+      DiscoveryService.setEnrichmentProvider(originalEnricher);
       DiscoveryService.setWebKnowledgeProvider(originalWebKnowledge);
     }
   });

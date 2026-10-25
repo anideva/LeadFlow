@@ -30,6 +30,8 @@ export function exportProspectsToCsv(
     'Email',
     'Phone',
     'Website',
+    'Instagram',
+    'SocialProfiles',
     'Address',
     'City',
     'State',
@@ -40,12 +42,17 @@ export function exportProspectsToCsv(
   ];
 
   const rows = prospects.map((p) => {
+    const instagram = p.socialProfiles?.find((s) => s.platform.toLowerCase() === 'instagram')?.url || '';
+    const otherSocials = p.socialProfiles?.map((s) => `${s.platform}: ${s.url}`).join('; ') || '';
+
     return [
       escapeCsvValue(p.name || ''),
       escapeCsvValue(p.category || ''),
       escapeCsvValue(p.email || ''),
       escapeCsvValue(p.phone || ''),
       escapeCsvValue(p.website || ''),
+      escapeCsvValue(instagram),
+      escapeCsvValue(otherSocials),
       escapeCsvValue(p.location?.address || ''),
       escapeCsvValue(p.location?.city || ''),
       escapeCsvValue(p.location?.state || ''),

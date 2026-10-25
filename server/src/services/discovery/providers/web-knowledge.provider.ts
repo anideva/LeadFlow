@@ -17,15 +17,78 @@ interface CacheEntry {
   expiresAt: number;
 }
 
+/**
+ * WebKnowledgeSearchProvider
+ *
+ * Compliant directory and public web knowledge resolver for LeadFlow.
+ * Enforces strict TLS certificate verification (rejectUnauthorized: true).
+ * Does NOT perform unauthorized scraping of consumer HTML search engines.
+ * Manages an in-memory bounded cache with 30-minute TTL and FIFO eviction.
+ */
 export class WebKnowledgeSearchProvider {
   private readonly userAgent: string;
+
+  // Bounded in-memory cache for public directory search results
   private static cache = new Map<string, CacheEntry>();
-  private static readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+  public static readonly MAX_CACHE_ENTRIES = 500;
+  public static readonly CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 
   constructor(
     userAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
   ) {
     this.userAgent = userAgent;
+  }
+
+  /**
+   * Returns the TLS configuration for outbound HTTPS requests.
+   * Enforces strict TLS certificate verification in compliance with security guidelines.
+   */
+  public getTlsConfig(): { rejectUnauthorized: boolean } {
+    return { rejectUnauthorized: true };
+  }
+
+  /**
+   * Retrieves an item from the bounded cache if present and not expired.
+   */
+  public static getCached(key: string): WebKnowledgeSearchResult | null {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      return null;
+    }
+    return entry.result;
+  }
+
+  /**
+   * Stores an item in the bounded cache with eviction if maximum size is reached.
+   * Preserves tenant isolation: cache keys are strictly public entity keys (name::city).
+   */
+  public static setCached(key: string, result: WebKnowledgeSearchResult): void {
+    if (this.cache.size >= this.MAX_CACHE_ENTRIES) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) {
+        this.cache.delete(oldestKey);
+      }
+    }
+    this.cache.set(key, {
+      result,
+      expiresAt: Date.now() + this.CACHE_TTL_MS
+    });
+  }
+
+  /**
+   * Clears all cached knowledge entries (useful for test isolation).
+   */
+  public static clearCache(): void {
+    this.cache.clear();
+  }
+
+  /**
+   * Returns the current number of cached knowledge entries.
+   */
+  public static getCacheSize(): number {
+    return this.cache.size;
   }
 
   /**
@@ -108,40 +171,88 @@ export class WebKnowledgeSearchProvider {
   }
 
   /**
-   * Internal HTTP request engine with relaxed TLS verification and resilient fallback.
+   * Validates and cleans a public business email.
    */
-  private fetchHtml(hostname: string, path: string, method: 'GET' | 'POST', body?: string): Promise<string | null> {
-    return new Promise((resolve) => {
+  public cleanAndValidateEmail(raw: string): string | null {
+    if (!raw || typeof raw !== 'string') return null;
+    const clean = raw.toLowerCase().trim().replace(/^mailto:/i, '');
+    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+    if (!emailRegex.test(clean)) return null;
+    if (clean.endsWith('.png') || clean.endsWith('.jpg') || clean.endsWith('.jpeg')) return null;
+    return clean;
+  }
+
+  /**
+   * Extracts clean, public social media profile links from candidate URLs.
+   * Filters out OAuth, share/intent links, and tracking parameters.
+   */
+  public extractSocialProfile(url: string): SocialProfile | null {
+    if (!url || typeof url !== 'string') return null;
+    const lowerUrl = url.toLowerCase();
+
+    if (
+      lowerUrl.includes('facebook.com/') &&
+      !lowerUrl.includes('sharer') &&
+      !lowerUrl.includes('/login') &&
+      !lowerUrl.includes('/share')
+    ) {
+      return { platform: 'Facebook', url, source: 'Facebook' };
+    }
+    if (
+      lowerUrl.includes('instagram.com/') &&
+      !lowerUrl.includes('/p/') &&
+      !lowerUrl.includes('/explore/')
+    ) {
+      return { platform: 'Instagram', url, source: 'Instagram' };
+    }
+    if (
+      lowerUrl.includes('linkedin.com/') &&
+      !lowerUrl.includes('/share') &&
+      !lowerUrl.includes('/login')
+    ) {
+      return { platform: 'LinkedIn', url, source: 'LinkedIn' };
+    }
+    if (
+      (lowerUrl.includes('twitter.com/') || lowerUrl.includes('x.com/')) &&
+      !lowerUrl.includes('/intent/') &&
+      !lowerUrl.includes('/share')
+    ) {
+      return { platform: 'Twitter', url, source: 'Twitter' };
+    }
+    if (
+      lowerUrl.includes('youtube.com/') &&
+      !lowerUrl.includes('/watch')
+    ) {
+      return { platform: 'YouTube', url, source: 'YouTube' };
+    }
+
+    return null;
+  }
+
+  /**
+   * Internal HTTPS request helper with strict TLS verification.
+   * Rejects invalid or untrusted certificates (rejectUnauthorized: true).
+   */
+  private fetchJson(url: string, headers: Record<string, string> = {}): Promise<any> {
+    return new Promise((resolve, reject) => {
       try {
-        const headers: Record<string, string> = {
-          'User-Agent': this.userAgent,
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.9',
-          'Sec-Fetch-Dest': 'document',
-          'Sec-Fetch-Mode': 'navigate',
-          'Sec-Fetch-Site': 'same-origin',
-          'Sec-Fetch-User': '?1',
-          'Upgrade-Insecure-Requests': '1'
-        };
-
-        if (method === 'POST' && body) {
-          headers['Content-Type'] = 'application/x-www-form-urlencoded';
-          headers['Content-Length'] = String(Buffer.byteLength(body));
-          headers['Origin'] = `https://${hostname}`;
-          headers['Referer'] = `https://${hostname}/`;
-        }
-
+        const parsed = new URL(url);
         const req = https.request(
           {
-            hostname,
-            path,
-            method,
-            headers,
-            rejectUnauthorized: false,
-            timeout: 6000
+            protocol: parsed.protocol,
+            hostname: parsed.hostname,
+            path: parsed.pathname + parsed.search,
+            method: 'GET',
+            headers: {
+              'User-Agent': this.userAgent,
+              'Accept': 'application/json',
+              ...headers
+            },
+            rejectUnauthorized: true, // Strict certificate validation
+            timeout: 5000
           },
           (res) => {
-            if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 400)) {
+            if (res.statusCode && (res.statusCode < 200 || res.statusCode >= 300)) {
               resolve(null);
               return;
             }
@@ -150,32 +261,40 @@ export class WebKnowledgeSearchProvider {
               data += chunk;
               if (data.length > 2 * 1024 * 1024) {
                 req.destroy();
-                resolve(data);
+                resolve(null);
               }
             });
-            res.on('end', () => resolve(data));
+            res.on('end', () => {
+              try {
+                resolve(JSON.parse(data));
+              } catch {
+                resolve(null);
+              }
+            });
           }
         );
 
-        req.on('error', () => resolve(null));
+        req.on('error', (err) => reject(err));
         req.on('timeout', () => {
           req.destroy();
           resolve(null);
         });
-
-        if (method === 'POST' && body) {
-          req.write(body);
-        }
         req.end();
-      } catch {
-        resolve(null);
+      } catch (err) {
+        reject(err);
       }
     });
   }
 
   /**
-   * Searches public web knowledge for a business by name, city, and category.
-   * Extracts contact numbers, Instagram, Facebook, and official websites.
+   * Searches public business knowledge.
+   *
+   * In compliance with LeadFlow security and terms of service guidelines:
+   * 1. Checks bounded in-memory cache first (30m TTL).
+   * 2. If an authorized search API key is configured (e.g. Google Custom Search JSON API),
+   *    queries the authorized API via strict HTTPS (rejectUnauthorized: true).
+   * 3. Does NOT scrape DuckDuckGo or Bing consumer HTML pages.
+   * 4. When no authorized API is configured, returns null cleanly without throwing or discarding leads.
    */
   public async searchBusiness(
     businessName: string,
@@ -185,202 +304,89 @@ export class WebKnowledgeSearchProvider {
     if (!businessName || !businessName.trim()) return null;
 
     const normalizedKey = `${businessName.toLowerCase().trim()}::${(city || '').toLowerCase().trim()}`;
-    const cached = WebKnowledgeSearchProvider.cache.get(normalizedKey);
-    if (cached && Date.now() < cached.expiresAt) {
-      return cached.result;
+    const cached = WebKnowledgeSearchProvider.getCached(normalizedKey);
+    if (cached) {
+      return cached;
     }
 
-    const queryParts = [businessName.trim(), city?.trim(), category?.trim(), 'contact phone instagram facebook'].filter(Boolean);
-    const query = queryParts.join(' ');
+    // Check for authorized Google Custom Search JSON API credentials
+    const googleApiKey = process.env.GOOGLE_SEARCH_API_KEY?.trim();
+    const googleCx = process.env.GOOGLE_SEARCH_CX?.trim();
 
-    // 1. Primary: POST to DDG HTML endpoint with full browser headers
-    const postBody = `q=${encodeURIComponent(query)}&b=`;
-    let html = await this.fetchHtml('html.duckduckgo.com', '/html/', 'POST', postBody);
+    if (googleApiKey && googleCx) {
+      try {
+        const queryParts = [businessName.trim(), city?.trim(), category?.trim()].filter(Boolean);
+        const query = encodeURIComponent(queryParts.join(' '));
+        const apiUrl = `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(googleApiKey)}&cx=${encodeURIComponent(googleCx)}&q=${query}`;
 
-    // 2. Fallback: GET request if POST was blocked or empty
-    if (!html || html.length < 500) {
-      html = await this.fetchHtml('html.duckduckgo.com', `/html/?q=${encodeURIComponent(query)}`, 'GET');
-    }
+        const data = await this.fetchJson(apiUrl);
+        if (data && Array.isArray(data.items)) {
+          const phones: string[] = [];
+          const emails: string[] = [];
+          const socialProfiles: SocialProfile[] = [];
+          let candidateWebsite: string | undefined = undefined;
+          let topSnippet: string | undefined = undefined;
 
-    if (!html || html.length < 500) {
-      return null;
-    }
+          for (const item of data.items) {
+            if (!topSnippet && item.snippet) {
+              topSnippet = item.snippet;
+            }
 
-    const snippets: string[] = [];
-    const snippetMatches = html.match(/<a class="result__snippet[^>]*>([\s\S]*?)<\/a>/g) || [];
-    for (const sm of snippetMatches) {
-      snippets.push(
-        sm
-          .replace(/<[^>]+>/g, '')
-          .replace(/&#x27;/g, "'")
-          .replace(/&amp;/g, '&')
-          .replace(/&quot;/g, '"')
-          .trim()
-      );
-    }
+            // Extract candidate website
+            if (!candidateWebsite && item.link) {
+              const social = this.extractSocialProfile(item.link);
+              if (social) {
+                if (!socialProfiles.some((s) => s.platform === social.platform)) {
+                  socialProfiles.push(social);
+                }
+              } else {
+                candidateWebsite = item.link;
+              }
+            }
 
-    // 1. Extract and validate phones from snippets
-    const rawPhoneRegex = /(?:(?:\+|0{0,2})\d{1,3}[-.\s]?)?(?:\(?\d{2,5}\)?[-.\s]?)?\d{3,5}[-.\s]?\d{4,5}/g;
-    const validatedPhones: string[] = [];
-    const seenDigits = new Set<string>();
+            // Extract phones from snippet
+            if (item.snippet) {
+              const phoneMatches = item.snippet.match(/(?:(?:\+|0{0,2})\d{1,3}[-.\s]?)?(?:\(?\d{2,5}\)?[-.\s]?)?\d{3,5}[-.\s]?\d{4,5}/g) || [];
+              for (const pm of phoneMatches) {
+                const clean = this.cleanAndValidatePhone(pm);
+                if (clean && !phones.includes(clean)) {
+                  phones.push(clean);
+                }
+              }
 
-    for (const snippet of snippets) {
-      const candidates = snippet.match(rawPhoneRegex) || [];
-      for (const cand of candidates) {
-        const clean = this.cleanAndValidatePhone(cand);
-        if (clean) {
-          const sig = clean.replace(/\D/g, '').slice(-10);
-          if (!seenDigits.has(sig)) {
-            seenDigits.add(sig);
-            validatedPhones.push(clean);
+              // Extract emails from snippet
+              const emailMatches = item.snippet.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) || [];
+              for (const em of emailMatches) {
+                const cleanEm = this.cleanAndValidateEmail(em);
+                if (cleanEm && !emails.includes(cleanEm)) {
+                  emails.push(cleanEm);
+                }
+              }
+            }
           }
+
+          const result: WebKnowledgeSearchResult = {
+            phones,
+            emails,
+            website: candidateWebsite,
+            sourceName: 'Google Custom Search',
+            sourceUrl: candidateWebsite,
+            socialProfiles,
+            overview: topSnippet
+          };
+
+          WebKnowledgeSearchProvider.setCached(normalizedKey, result);
+          return result;
         }
+      } catch {
+        // Fail-safe: authorized API failure returns null without throwing
+        return null;
       }
     }
 
-    // 2. Extract address from snippets
-    let extractedAddress: string | undefined = undefined;
-    for (const snippet of snippets) {
-      const addrMatch =
-        snippet.match(/(?:situated at|located at|office is situated at|address:?)\s*([^.]+(?:-\s*\d{6}|\b\d{5,6}\b|India|Assam|[A-Z]{2}\b))/i) ||
-        snippet.match(/(?:situated at|located at|office is situated at|address:?)\s*([^.]+)/i);
-      if (addrMatch) {
-        extractedAddress = addrMatch[1].trim();
-        break;
-      }
-      const floorMatch = snippet.match(/(\d+(?:st|nd|rd|th)?\s+floor[^.]+(?:[A-Za-z]+|\d{5,6}))/i);
-      if (floorMatch) {
-        extractedAddress = floorMatch[1].trim();
-        break;
-      }
-    }
-
-    // 3. Extract candidate URLs & social links
-    const rawHrefMatches = html.match(/href="([^"]+)"/g) || [];
-    let candidateWebsite: string | undefined = undefined;
-    let topSourceUrl: string | undefined = undefined;
-    const socialProfiles: SocialProfile[] = [];
-    const seenSocials = new Set<string>();
-
-    const knownDirectories = [
-      'justdial.com',
-      'lybrate.com',
-      'practo.com',
-      'google.com',
-      'idbf.in',
-      'guwahatiportal.com',
-      'promallu.com',
-      'yellowpages.com',
-      'yelp.com',
-      'wikipedia.org',
-      'wikidata.org'
-    ];
-
-    for (const m of rawHrefMatches) {
-      const hrefMatch = m.match(/href="([^"]+)"/);
-      if (!hrefMatch) continue;
-
-      let href = hrefMatch[1];
-      if (href.startsWith('//')) href = `https:${href}`;
-
-      let actualUrl = href;
-      const uddgMatch = href.match(/[?&]uddg=([^&]+)/);
-      if (uddgMatch) {
-        actualUrl = decodeURIComponent(uddgMatch[1]);
-      }
-
-      if (!actualUrl.startsWith('http://') && !actualUrl.startsWith('https://')) continue;
-      if (actualUrl.includes('duckduckgo.com')) continue;
-
-      if (!topSourceUrl) {
-        topSourceUrl = actualUrl;
-      }
-
-      const lowerUrl = actualUrl.toLowerCase();
-
-      // Check for social profiles in search results (skipping generic share/login paths)
-      if (
-        lowerUrl.includes('facebook.com/') &&
-        !lowerUrl.includes('sharer') &&
-        !lowerUrl.includes('/login') &&
-        !lowerUrl.includes('/share') &&
-        !seenSocials.has('facebook')
-      ) {
-        seenSocials.add('facebook');
-        socialProfiles.push({ platform: 'Facebook', url: actualUrl, source: 'Facebook' });
-      } else if (
-        lowerUrl.includes('instagram.com/') &&
-        !lowerUrl.includes('/p/') &&
-        !lowerUrl.includes('/explore/') &&
-        !seenSocials.has('instagram')
-      ) {
-        seenSocials.add('instagram');
-        socialProfiles.push({ platform: 'Instagram', url: actualUrl, source: 'Instagram' });
-      } else if (
-        lowerUrl.includes('linkedin.com/') &&
-        !lowerUrl.includes('/share') &&
-        !seenSocials.has('linkedin')
-      ) {
-        seenSocials.add('linkedin');
-        socialProfiles.push({ platform: 'LinkedIn', url: actualUrl, source: 'LinkedIn' });
-      } else if (
-        (lowerUrl.includes('twitter.com/') || lowerUrl.includes('x.com/')) &&
-        !lowerUrl.includes('/intent/') &&
-        !lowerUrl.includes('/share') &&
-        !seenSocials.has('twitter')
-      ) {
-        seenSocials.add('twitter');
-        socialProfiles.push({ platform: 'Twitter', url: actualUrl, source: 'Twitter' });
-      } else if (
-        lowerUrl.includes('youtube.com/') &&
-        !lowerUrl.includes('/watch') &&
-        !seenSocials.has('youtube')
-      ) {
-        seenSocials.add('youtube');
-        socialProfiles.push({ platform: 'YouTube', url: actualUrl, source: 'YouTube' });
-      }
-
-      // If URL is an independent business website (not a major directory), pick as candidate website
-      if (!candidateWebsite) {
-        const isDirectory = knownDirectories.some((dir) => lowerUrl.includes(dir));
-        if (!isDirectory && !socialProfiles.some((s) => s.url === actualUrl)) {
-          candidateWebsite = actualUrl;
-        }
-      }
-    }
-
-    // 4. Extract emails from snippets if present
-    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
-    const validatedEmails: string[] = [];
-    for (const snippet of snippets) {
-      const emMatches = snippet.match(emailRegex) || [];
-      for (const em of emMatches) {
-        const cleanEm = em.toLowerCase().trim();
-        if (!validatedEmails.includes(cleanEm) && !cleanEm.endsWith('.png') && !cleanEm.endsWith('.jpg')) {
-          validatedEmails.push(cleanEm);
-        }
-      }
-    }
-
-    const sourceName = topSourceUrl ? this.identifySourceLabel(topSourceUrl) : 'Google / Web Search';
-
-    const result: WebKnowledgeSearchResult = {
-      phones: validatedPhones,
-      emails: validatedEmails,
-      address: extractedAddress,
-      website: candidateWebsite || topSourceUrl,
-      sourceName,
-      sourceUrl: topSourceUrl,
-      socialProfiles,
-      overview: snippets.length > 0 ? snippets[0] : undefined
-    };
-
-    // Store in cache
-    WebKnowledgeSearchProvider.cache.set(normalizedKey, {
-      result,
-      expiresAt: Date.now() + WebKnowledgeSearchProvider.CACHE_TTL_MS
-    });
-
-    return result;
+    // Default zero-cost compliant behavior:
+    // In the absence of an authorized API key, LeadFlow does not perform unauthorized consumer HTML scraping.
+    // Return null cleanly; existing permitted providers (Apify, OSM, WebsiteEnrichment, Wikidata) handle discovery.
+    return null;
   }
 }

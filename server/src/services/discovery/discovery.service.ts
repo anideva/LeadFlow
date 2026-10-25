@@ -102,9 +102,35 @@ export class DiscoveryService {
       }
     }
 
-    // Background web knowledge discovery search (e.g. Google Maps/Search, Justdial, public directory snippets)
+    // Supplementary single-business resolution via Google Places (Apify) if enabled and phone or website is missing
+    let apifyPlaceResult: DiscoveredProspect | null = null;
+    const isApifyConfigured =
+      process.env.APIFY_ENABLED === 'true' &&
+      Boolean(process.env.APIFY_API_TOKEN?.trim()) &&
+      Boolean(process.env.APIFY_ACTOR_ID?.trim());
+
+    if (isApifyConfigured && _workspaceId !== 'auto_discovery' && (!websiteToScrape || !prospect.phone)) {
+      try {
+        const apifyProvider = DiscoveryProviderFactory.createProvider('apify');
+        const specificQuery = [prospect.name, prospect.location?.city].filter(Boolean).join(' ');
+        const apifyRes = await apifyProvider.search({
+          query: specificQuery,
+          limit: 1
+        });
+        if (apifyRes.prospects && apifyRes.prospects.length > 0) {
+          apifyPlaceResult = apifyRes.prospects[0];
+          if (!websiteToScrape && apifyPlaceResult.website) {
+            websiteToScrape = apifyPlaceResult.website;
+          }
+        }
+      } catch {
+        // Non-blocking fail-safe
+      }
+    }
+
+    // Background web knowledge discovery search (e.g. Google Maps/Search, Bing, Justdial, public directory snippets)
     let webKnowledgeResult: any = null;
-    if (!websiteToScrape) {
+    if (!websiteToScrape && !apifyPlaceResult?.phone) {
       try {
         webKnowledgeResult = await this.webKnowledgeProviderInstance.searchBusiness(
           prospect.name,
@@ -120,8 +146,19 @@ export class DiscoveryService {
       }
     }
 
-    if (!websiteToScrape && !wikiResult && (!webKnowledgeResult || (webKnowledgeResult.phones.length === 0 && !webKnowledgeResult.address && webKnowledgeResult.socialProfiles.length === 0))) {
-      throw new AppError(400, 'Unable to automatically locate contact information or official website for this business. You can provide a website URL or enter contact details manually.');
+    if (
+      !websiteToScrape &&
+      !wikiResult &&
+      !apifyPlaceResult &&
+      (!webKnowledgeResult ||
+        (webKnowledgeResult.phones.length === 0 &&
+          !webKnowledgeResult.address &&
+          webKnowledgeResult.socialProfiles.length === 0))
+    ) {
+      throw new AppError(
+        400,
+        'Unable to automatically locate contact information or official website for this business. You can provide a website URL or enter contact details manually.'
+      );
     }
 
     let enrichment: ProspectEnrichmentResult;
@@ -145,30 +182,33 @@ export class DiscoveryService {
           }
         }
       } catch (scrapeErr) {
-        // If scraping fails (site unreachable/offline), fallback to web knowledge data if available
-        if (webKnowledgeResult || wikiResult) {
+        // If scraping fails (site unreachable/offline), fallback to web knowledge data or Apify if available
+        if (webKnowledgeResult || wikiResult || apifyPlaceResult) {
           enrichment = {
-            businessName: undefined,
+            businessName: apifyPlaceResult?.name,
             emails: [
+              ...(apifyPlaceResult?.email ? [apifyPlaceResult.email] : []),
               ...(webKnowledgeResult?.emails || []),
               ...(wikiResult?.email ? [wikiResult.email] : [])
             ],
             phones: [
+              ...(apifyPlaceResult?.phone ? [apifyPlaceResult.phone] : []),
               ...(webKnowledgeResult?.phones || []),
               ...(wikiResult?.phone ? [wikiResult.phone] : [])
             ],
-            website: websiteToScrape,
+            website: websiteToScrape || apifyPlaceResult?.website,
             contactPages: [],
             socialProfiles: [
+              ...(apifyPlaceResult?.socialProfiles || []),
               ...(webKnowledgeResult?.socialProfiles || []),
               ...(wikiResult?.socialProfiles || [])
             ],
-            address: webKnowledgeResult?.address,
+            address: apifyPlaceResult?.location?.address || webKnowledgeResult?.address,
             overview: webKnowledgeResult?.overview || wikiResult?.description,
             provenance: {},
             metadata: {
-              provider: webKnowledgeResult?.sourceName ? `web_search_${webKnowledgeResult.sourceName.toLowerCase().replace(/\s+/g, '_')}` : 'web_knowledge',
-              targetUrl: websiteToScrape,
+              provider: apifyPlaceResult ? 'apify_google_places' : webKnowledgeResult?.sourceName ? `web_search_${webKnowledgeResult.sourceName.toLowerCase().replace(/\s+/g, '_')}` : 'web_knowledge',
+              targetUrl: websiteToScrape || apifyPlaceResult?.website || '',
               pagesScanned: [],
               durationMs: 0,
               cached: false
@@ -179,29 +219,32 @@ export class DiscoveryService {
         }
       }
     } else {
-      // Knowledge-based enrichment from web search snippets and Wikidata
+      // Knowledge-based enrichment from Google Places, web search snippets, and Wikidata
       enrichment = {
-        businessName: undefined,
+        businessName: apifyPlaceResult?.name,
         emails: [
+          ...(apifyPlaceResult?.email ? [apifyPlaceResult.email] : []),
           ...(webKnowledgeResult?.emails || []),
           ...(wikiResult?.email ? [wikiResult.email] : [])
         ],
         phones: [
+          ...(apifyPlaceResult?.phone ? [apifyPlaceResult.phone] : []),
           ...(webKnowledgeResult?.phones || []),
           ...(wikiResult?.phone ? [wikiResult.phone] : [])
         ],
-        website: webKnowledgeResult?.website || wikiResult?.website || undefined,
+        website: apifyPlaceResult?.website || webKnowledgeResult?.website || wikiResult?.website || undefined,
         contactPages: [],
         socialProfiles: [
+          ...(apifyPlaceResult?.socialProfiles || []),
           ...(webKnowledgeResult?.socialProfiles || []),
           ...(wikiResult?.socialProfiles || [])
         ],
-        address: webKnowledgeResult?.address,
+        address: apifyPlaceResult?.location?.address || webKnowledgeResult?.address,
         overview: webKnowledgeResult?.overview || wikiResult?.description,
         provenance: {},
         metadata: {
-          provider: webKnowledgeResult?.sourceName ? `web_search_${webKnowledgeResult.sourceName.toLowerCase().replace(/\s+/g, '_')}` : (wikiResult ? 'wikidata' : 'web_knowledge'),
-          targetUrl: webKnowledgeResult?.sourceUrl || '',
+          provider: apifyPlaceResult ? 'apify_google_places' : webKnowledgeResult?.sourceName ? `web_search_${webKnowledgeResult.sourceName.toLowerCase().replace(/\s+/g, '_')}` : (wikiResult ? 'wikidata' : 'web_knowledge'),
+          targetUrl: apifyPlaceResult?.website || webKnowledgeResult?.sourceUrl || '',
           pagesScanned: webKnowledgeResult?.sourceUrl ? [webKnowledgeResult.sourceUrl] : [],
           durationMs: 0,
           cached: false
@@ -421,6 +464,42 @@ export class DiscoveryService {
       }
     }
 
+    // Merge any Google Places (Apify) fields if available
+    if (apifyPlaceResult) {
+      if (!enriched.phone && apifyPlaceResult.phone) {
+        enriched.phone = apifyPlaceResult.phone;
+        enriched.provenance.phone = {
+          value: apifyPlaceResult.phone,
+          source: 'Google Maps via Apify',
+          extractedAt: new Date().toISOString()
+        };
+      }
+      if (!enriched.location?.address && apifyPlaceResult.location?.address) {
+        enriched.location = enriched.location || {};
+        enriched.location.address = apifyPlaceResult.location.address;
+        enriched.provenance.address = {
+          value: apifyPlaceResult.location.address,
+          source: 'Google Maps via Apify',
+          extractedAt: new Date().toISOString()
+        };
+      }
+      if (!enriched.website && apifyPlaceResult.website) {
+        enriched.website = apifyPlaceResult.website;
+        enriched.provenance.website = {
+          value: apifyPlaceResult.website,
+          source: 'Google Maps via Apify',
+          extractedAt: new Date().toISOString()
+        };
+      }
+      if (apifyPlaceResult.discoveryMetadata?.rating) {
+        enriched.discoveryMetadata = {
+          ...(enriched.discoveryMetadata || {}),
+          rating: apifyPlaceResult.discoveryMetadata.rating,
+          reviewCount: apifyPlaceResult.discoveryMetadata.reviewCount
+        };
+      }
+    }
+
     enriched.isEnriched = true;
     enriched.enrichmentMetadata = {
       ...enrichment.metadata,
@@ -455,7 +534,7 @@ export class DiscoveryService {
 
     return {
       apifyEnabled,
-      defaultProvider: process.env.DISCOVERY_PROVIDER || 'osm_combined',
+      defaultProvider: apifyEnabled ? 'apify' : (process.env.DISCOVERY_PROVIDER || 'osm_combined'),
       usage
     };
   }
@@ -472,8 +551,12 @@ export class DiscoveryService {
       throw new AppError(400, 'Search query cannot be empty.');
     }
 
-    // If request explicitly specifies Apify, execute with Tier-1 workspace usage protection
-    if (request.provider && request.provider.toLowerCase().startsWith('apify')) {
+    // If request explicitly specifies Apify or defaults to Apify when enabled:
+    const isApifyRequested =
+      (request.provider && request.provider.toLowerCase().startsWith('apify')) ||
+      (!request.provider && (process.env.DISCOVERY_PROVIDER === 'apify' || process.env.APIFY_ENABLED === 'true'));
+
+    if (isApifyRequested) {
       // 1. Tier 1: Check & reserve daily quota in MongoDB atomically
       const reservation = await WorkspaceUsageService.reserveDailyRun(workspaceId);
       if (!reservation.allowed) {
@@ -504,6 +587,11 @@ export class DiscoveryService {
             date: reservation.date
           }
         };
+
+        // Automatically enrich discovered prospects with website emails, social profiles, etc.
+        if (request.autoEnrich !== false && searchResult.prospects && searchResult.prospects.length > 0) {
+          searchResult.prospects = await this.autoEnrichProspects(searchResult.prospects);
+        }
 
         return searchResult;
       } catch (err: any) {

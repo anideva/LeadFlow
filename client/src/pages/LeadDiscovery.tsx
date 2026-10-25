@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
   searchProspects,
-  enrichProspect,
   convertProspectToLead,
   getDiscoveryConfig,
   DiscoveredProspect,
@@ -23,7 +22,6 @@ const EXAMPLE_QUERIES = [
 ];
 
 type ConversionStatus = 'idle' | 'converting' | 'saved' | 'error';
-type EnrichStatus = 'idle' | 'loading' | 'enriched' | 'error';
 
 interface LeadDiscoveryProps {
   onNavigateToCRM?: () => void;
@@ -40,14 +38,6 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
   const [conversionState, setConversionState] = useState<Record<string, ConversionStatus>>({});
   const [conversionMsg, setConversionMsg] = useState<string | null>(null);
 
-  // Track website enrichment state per prospect ID: 'idle' | 'loading' | 'enriched' | 'error'
-  const [enrichingState, setEnrichingState] = useState<Record<string, EnrichStatus>>({});
-
-  // Track inline website entry prompt state per prospect ID: true = open, false = closed
-  const [urlInputOpen, setUrlInputOpen] = useState<Record<string, boolean>>({});
-  // Track custom website input value per prospect ID
-  const [customWebsites, setCustomWebsites] = useState<Record<string, string>>({});
-
   // Track inline manual contact edit form state per prospect ID: true = open, false = closed
   const [editFormOpen, setEditFormOpen] = useState<Record<string, boolean>>({});
   // Track manual field drafts per prospect ID
@@ -59,7 +49,7 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
 
   // Experimental Apify provider selector state (controlled safely from backend flags)
   const [apifyEnabled, setApifyEnabled] = useState(false);
-  const [selectedSource, setSelectedSource] = useState<'free' | 'apify'>('free');
+  const [selectedSource, setSelectedSource] = useState<'free' | 'apify'>('apify');
   const [apifyUsage, setApifyUsage] = useState<DiscoveryUsage | null>(null);
   const [apifyLimitError, setApifyLimitError] = useState<string | null>(null);
 
@@ -68,6 +58,9 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
       .then((cfg) => {
         if (cfg && cfg.apifyEnabled) {
           setApifyEnabled(true);
+          setSelectedSource('apify');
+        } else {
+          setSelectedSource('free');
         }
         if (cfg && cfg.usage) {
           setApifyUsage(cfg.usage);
@@ -155,31 +148,6 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
     }
   };
 
-  const handleEnrich = async (prospect: DiscoveredProspect, customUrl?: string) => {
-    try {
-      setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'loading' }));
-      setError(null);
-
-      const targetUrl = customUrl?.trim() || prospect.website;
-      const { prospect: enrichedProspect } = await enrichProspect(prospect, targetUrl);
-
-      if (searchResult) {
-        setSearchResult({
-          ...searchResult,
-          prospects: searchResult.prospects.map((p) =>
-            p.id === prospect.id ? enrichedProspect : p
-          )
-        });
-      }
-
-      setUrlInputOpen((prev) => ({ ...prev, [prospect.id]: false }));
-      setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'enriched' }));
-      setConversionMsg(`Enriched "${prospect.name}" with public contact data and verified details!`);
-    } catch (err: any) {
-      setEnrichingState((prev) => ({ ...prev, [prospect.id]: 'error' }));
-      setError(err.message || `Website enrichment failed for "${prospect.name}".`);
-    }
-  };
 
   const handleSaveManualEdit = (prospect: DiscoveredProspect) => {
     const edits = manualEdits[prospect.id] || {};
@@ -272,6 +240,38 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
             >
               <button
                 type="button"
+                onClick={() => setSelectedSource('apify')}
+                style={{
+                  padding: '0.35rem 0.85rem',
+                  fontSize: '0.8rem',
+                  fontWeight: 600,
+                  border: 'none',
+                  borderRadius: '6px',
+                  backgroundColor: selectedSource === 'apify' ? '#2563eb' : 'transparent',
+                  color: selectedSource === 'apify' ? '#ffffff' : '#4b5563',
+                  boxShadow: selectedSource === 'apify' ? '0 1px 2px rgba(0,0,0,0.1)' : 'none',
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '0.35rem'
+                }}
+              >
+                <span>📍 Google Maps (Live Phone & Web)</span>
+                <span
+                  style={{
+                    fontSize: '0.65rem',
+                    backgroundColor: selectedSource === 'apify' ? '#1d4ed8' : '#e0e7ff',
+                    color: selectedSource === 'apify' ? '#ffffff' : '#3730a3',
+                    padding: '0.1rem 0.35rem',
+                    borderRadius: '4px',
+                    fontWeight: 700
+                  }}
+                >
+                  Recommended
+                </span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setSelectedSource('free')}
                 style={{
                   padding: '0.35rem 0.85rem',
@@ -285,30 +285,13 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                   cursor: 'pointer'
                 }}
               >
-                Current Free Discovery
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedSource('apify')}
-                style={{
-                  padding: '0.35rem 0.85rem',
-                  fontSize: '0.8rem',
-                  fontWeight: 600,
-                  border: 'none',
-                  borderRadius: '6px',
-                  backgroundColor: selectedSource === 'apify' ? '#2563eb' : 'transparent',
-                  color: selectedSource === 'apify' ? '#ffffff' : '#6b7280',
-                  boxShadow: selectedSource === 'apify' ? '0 1px 2px rgba(0,0,0,0.05)' : 'none',
-                  cursor: 'pointer'
-                }}
-              >
-                Apify Google Maps
+                Free OpenStreetMap
               </button>
             </div>
             {selectedSource === 'apify' && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.75rem', color: '#b45309', backgroundColor: '#fef3c7', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid #fde68a' }}>
-                  Experimental Google Maps POI
+                <span style={{ fontSize: '0.75rem', color: '#166534', backgroundColor: '#dcfce7', padding: '0.2rem 0.5rem', borderRadius: '4px', border: '1px solid #bbf7d0', fontWeight: 600 }}>
+                  ✓ Direct verified phone numbers, addresses & websites from Google Maps
                 </span>
                 {apifyUsage && (
                   <span
@@ -541,7 +524,7 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
           <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           <p style={{ marginTop: '1rem', color: '#4b5563', fontSize: '0.95rem' }}>
             {selectedSource === 'apify'
-              ? 'Searching Google Maps via Apify...'
+              ? 'Searching Google Maps and automatically retrieving business contacts, websites & social profiles...'
               : 'Discovering businesses and automatically retrieving contact details & social profiles...'}
           </p>
 
@@ -665,7 +648,6 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem' }}>
                 {searchResult.prospects.map((prospect: DiscoveredProspect) => {
                   const status = conversionState[prospect.id] || 'idle';
-                  const enrichStatus = enrichingState[prospect.id] || 'idle';
 
                   return (
                     <div
@@ -842,44 +824,69 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
 
                         {/* Contact Points */}
                         <div style={{ fontSize: '0.8rem', color: '#4b5563', borderTop: '1px solid #f3f4f6', paddingTop: '0.5rem', marginTop: '0.5rem' }}>
-                          <div style={{ marginBottom: '0.25rem' }}>
-                            <strong>Phone:</strong>{' '}
-                            {prospect.phone ? (
-                              <span>
-                                <a
-                                  href={`tel:${prospect.phone.replace(/[^\d+]/g, '')}`}
-                                  style={{ color: '#111827', textDecoration: 'none', fontWeight: 500 }}
-                                >
-                                  {prospect.phone}
-                                </a>
-                                {prospect.provenance?.phone?.source && (
-                                  <span
-                                    style={{
-                                      fontSize: '0.65rem',
-                                      backgroundColor:
-                                        prospect.provenance.phone.source === 'user_provided'
-                                          ? '#fef3c7'
-                                          : prospect.provenance.phone.source.toLowerCase().includes('google')
-                                          ? '#e0f2fe'
-                                          : '#f3e8ff',
-                                      color:
-                                        prospect.provenance.phone.source === 'user_provided'
-                                          ? '#92400e'
-                                          : prospect.provenance.phone.source.toLowerCase().includes('google')
-                                          ? '#0369a1'
-                                          : '#6b21a8',
-                                      padding: '0.1rem 0.35rem',
-                                      borderRadius: '3px',
-                                      marginLeft: '0.35rem',
-                                      fontWeight: 600
-                                    }}
+                          <div style={{ marginBottom: '0.35rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.35rem' }}>
+                            <div>
+                              <strong>Phone:</strong>{' '}
+                              {prospect.phone ? (
+                                <span>
+                                  <a
+                                    href={`tel:${prospect.phone.replace(/[^\d+]/g, '')}`}
+                                    style={{ color: '#15803d', textDecoration: 'none', fontWeight: 700, fontSize: '0.9rem' }}
+                                    title="Click to dial phone number"
                                   >
-                                    via {prospect.provenance.phone.source === 'user_provided' ? 'Manual Edit' : prospect.provenance.phone.source}
-                                  </span>
-                                )}
-                              </span>
-                            ) : (
-                              <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Not available</span>
+                                    {prospect.phone}
+                                  </a>
+                                  {prospect.provenance?.phone?.source && (
+                                    <span
+                                      style={{
+                                        fontSize: '0.65rem',
+                                        backgroundColor:
+                                          prospect.provenance.phone.source === 'user_provided'
+                                            ? '#fef3c7'
+                                            : prospect.provenance.phone.source.toLowerCase().includes('google')
+                                            ? '#e0f2fe'
+                                            : '#f3e8ff',
+                                        color:
+                                          prospect.provenance.phone.source === 'user_provided'
+                                            ? '#92400e'
+                                            : prospect.provenance.phone.source.toLowerCase().includes('google')
+                                            ? '#0369a1'
+                                            : '#6b21a8',
+                                        padding: '0.1rem 0.35rem',
+                                        borderRadius: '3px',
+                                        marginLeft: '0.35rem',
+                                        fontWeight: 600
+                                      }}
+                                    >
+                                      via {prospect.provenance.phone.source === 'user_provided' ? 'Manual Edit' : prospect.provenance.phone.source}
+                                    </span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span style={{ color: '#9ca3af', fontStyle: 'italic' }}>Not available</span>
+                              )}
+                            </div>
+                            {prospect.phone && (
+                              <a
+                                href={`tel:${prospect.phone.replace(/[^\d+]/g, '')}`}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem',
+                                  backgroundColor: '#16a34a',
+                                  color: '#ffffff',
+                                  fontSize: '0.75rem',
+                                  fontWeight: 700,
+                                  padding: '0.2rem 0.55rem',
+                                  borderRadius: '5px',
+                                  textDecoration: 'none',
+                                  boxShadow: '0 1px 2px rgba(22,163,74,0.2)'
+                                }}
+                                title={`Start call to ${prospect.phone}`}
+                              >
+                                <span>📞</span>
+                                <span>Call Now</span>
+                              </a>
                             )}
                           </div>
                           {prospect.discoveryMetadata?.whatsapp && (
@@ -1018,8 +1025,7 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                         </div>
 
                         <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                          {/* 1-Click Background Enrichment (works for all prospects, with or without website) */}
-                          {prospect.isEnriched ? (
+                          {prospect.isEnriched && (
                             <span
                               style={{
                                 fontSize: '0.75rem',
@@ -1036,28 +1042,6 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                             >
                               ✨ Enriched
                             </span>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => handleEnrich(prospect)}
-                              disabled={enrichStatus === 'loading'}
-                              title="Search Google, directories, and web pages in the background to extract phone numbers, address, and website"
-                              style={{
-                                padding: '0.4rem 0.75rem',
-                                borderRadius: '6px',
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                                border: '1px solid #c084fc',
-                                backgroundColor: enrichStatus === 'loading' ? '#faf5ff' : '#ffffff',
-                                color: '#7e22ce',
-                                cursor: enrichStatus === 'loading' ? 'default' : 'pointer',
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: '0.25rem'
-                              }}
-                            >
-                              {enrichStatus === 'loading' ? 'Searching & Enriching...' : '✨ Enrich'}
-                            </button>
                           )}
 
                           {/* Manual Edit / Add Details Button */}
@@ -1265,94 +1249,6 @@ export const LeadDiscovery: React.FC<LeadDiscoveryProps> = ({ onNavigateToCRM })
                               }}
                             >
                               Save Details
-                            </button>
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Inline Website URL Entry Tray when prospect has no website in OSM */}
-                      {urlInputOpen[prospect.id] && !prospect.isEnriched && (
-                        <div
-                          style={{
-                            marginTop: '0.75rem',
-                            padding: '0.75rem',
-                            backgroundColor: '#faf5ff',
-                            border: '1px solid #e9d5ff',
-                            borderRadius: '8px',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '0.5rem'
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.25rem' }}>
-                            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#6b21a8' }}>
-                              Enter website to extract contacts & social media:
-                            </span>
-                            <a
-                              href={`https://www.google.com/search?q=${encodeURIComponent(
-                                [prospect.name, prospect.location?.city, 'official website'].filter(Boolean).join(' ')
-                              )}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{ fontSize: '0.72rem', color: '#2563eb', textDecoration: 'none', fontWeight: 500 }}
-                              title="Search Google for official website"
-                            >
-                              🔍 Find on Google ↗
-                            </a>
-                          </div>
-                          <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
-                            <input
-                              type="text"
-                              value={customWebsites[prospect.id] || ''}
-                              onChange={(e) => setCustomWebsites({ ...customWebsites, [prospect.id]: e.target.value })}
-                              placeholder="e.g. example.com or https://..."
-                              style={{
-                                flex: 1,
-                                padding: '0.35rem 0.6rem',
-                                fontSize: '0.8rem',
-                                border: '1px solid #d8b4fe',
-                                borderRadius: '6px',
-                                outline: 'none'
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleEnrich(prospect, customWebsites[prospect.id]);
-                                }
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleEnrich(prospect, customWebsites[prospect.id])}
-                              disabled={enrichStatus === 'loading' || !customWebsites[prospect.id]?.trim()}
-                              style={{
-                                padding: '0.35rem 0.75rem',
-                                backgroundColor: !customWebsites[prospect.id]?.trim() ? '#d8b4fe' : '#7e22ce',
-                                color: '#ffffff',
-                                border: 'none',
-                                borderRadius: '6px',
-                                fontSize: '0.78rem',
-                                fontWeight: 600,
-                                cursor: !customWebsites[prospect.id]?.trim() ? 'not-allowed' : 'pointer',
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              {enrichStatus === 'loading' ? 'Enriching...' : 'Enrich Now'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setUrlInputOpen((prev) => ({ ...prev, [prospect.id]: false }))}
-                              style={{
-                                padding: '0.35rem 0.5rem',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                color: '#9ca3af',
-                                cursor: 'pointer',
-                                fontSize: '0.85rem'
-                              }}
-                              title="Cancel"
-                            >
-                              ✕
                             </button>
                           </div>
                         </div>
